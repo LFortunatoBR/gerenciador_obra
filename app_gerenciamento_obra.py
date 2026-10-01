@@ -34,8 +34,9 @@ if not check_password():
 # ==========================================
 # 2. CONEXÃO COM O BANCO NEON
 # ==========================================
-# O Streamlit já pega automaticamente a DATABASE_URL dos secrets
-conn = st.connection("postgresql", type="sql", url=st.secrets["DATABASE_URL"])
+# Ajusta a URL para forçar o uso do pacote psycopg2 que instalamos
+url_correta = st.secrets["DATABASE_URL"].replace("postgresql://", "postgresql+psycopg2://")
+conn = st.connection("postgresql", type="sql", url=url_correta)
 
 # ==========================================
 # 3. INTERFACE PRINCIPAL DO APLICATIVO
