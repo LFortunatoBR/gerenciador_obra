@@ -35,7 +35,7 @@ if not check_password():
 # 2. CONEXÃO COM O BANCO NEON
 # ==========================================
 # O Streamlit já pega automaticamente a DATABASE_URL dos secrets
-conn = st.connection("postgresql", type="sql")
+conn = st.connection("postgresql", type="sql", url=st.secrets["DATABASE_URL"])
 
 # ==========================================
 # 3. INTERFACE PRINCIPAL DO APLICATIVO
