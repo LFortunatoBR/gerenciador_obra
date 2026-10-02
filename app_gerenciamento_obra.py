@@ -529,7 +529,7 @@ with aba3:
     st.header("💸 Controle de Caixa (Financeiro)")
     c_f1, c_f2 = st.columns([1, 2])
     with c_f1:
-        st.subheader("Lançar Título")
+        st.subheader("Lançar Novo Título")
         with st.form("form_fin"):
             f_tipo = st.radio("Tipo", ["Despesa", "Receita"])
             f_desc = st.text_input("Descrição (Ex: Cimento, Empreiteiro)")
@@ -541,6 +541,24 @@ with aba3:
                     s.execute(text("INSERT INTO financeiro (obra_id, tipo, descricao, valor, data_vencimento, status) VALUES (:o, :t, :d, :v, :dt, :s)"),
                               {"o": int(obra_ativa_id), "t": f_tipo, "d": f_desc, "v": f_val, "dt": f_venc, "s": f_stat})
                     s.commit(); st.rerun()
+                    
+        # --- PAINEL DE EXCLUSÃO ---
+        df_fin_delete = conn.query("SELECT id, tipo, descricao, valor FROM financeiro WHERE obra_id = :oid ORDER BY data_vencimento", params={"oid": int(obra_ativa_id)}, ttl=0)
+        if not df_fin_delete.empty:
+            st.divider()
+            st.subheader("🗑️ Excluir Lançamento")
+            with st.form("form_delete_fin"):
+                fin_id_del = st.selectbox(
+                    "Selecione o registro para apagar:", 
+                    df_fin_delete['id'], 
+                    format_func=lambda x: f"{df_fin_delete[df_fin_delete['id']==x]['tipo'].values[0][:3].upper()} - {df_fin_delete[df_fin_delete['id']==x]['descricao'].values[0]} (R$ {df_fin_delete[df_fin_delete['id']==x]['valor'].values[0]:.2f})"
+                )
+                if st.form_submit_button("Excluir Definitivamente"):
+                    with conn.session as s:
+                        s.execute(text("DELETE FROM financeiro WHERE id=:id"), {"id": int(fin_id_del)})
+                        s.commit()
+                    st.success("Lançamento excluído com sucesso!")
+                    st.rerun()
                 
     with c_f2:
         df_fin = conn.query("SELECT id, tipo, descricao, valor, data_vencimento, status FROM financeiro WHERE obra_id = :oid ORDER BY data_vencimento", params={"oid": int(obra_ativa_id)}, ttl=0)
@@ -569,13 +587,26 @@ with aba3:
                 pdf.output("relatorio_caixa.pdf")
                 with open("relatorio_caixa.pdf", "rb") as f: st.download_button("⬇️ Baixar PDF (Caixa)", data=f.read(), file_name="Financeiro.pdf", mime="application/pdf")
             
-            st.write("Dê duplo clique no Status para alterar para Pago e clique no botão Salvar abaixo.")
-            df_edit_fin = st.data_editor(df_fin, column_config={"id": None, "tipo": st.column_config.TextColumn(disabled=True), "valor": st.column_config.NumberColumn(format="R$ %.2f"), "data_vencimento": st.column_config.DateColumn(format="DD/MM/YYYY")}, hide_index=True, use_container_width=True)
-            if st.button("💾 Salvar Alterações de Status"):
+            st.write("Edite qualquer campo diretamente na tabela abaixo (Duplo Clique) e clique em Salvar.")
+            df_edit_fin = st.data_editor(
+                df_fin, 
+                column_config={
+                    "id": None, 
+                    "tipo": st.column_config.SelectboxColumn("Tipo", options=["Despesa", "Receita"]), 
+                    "descricao": st.column_config.TextColumn("Descrição"),
+                    "valor": st.column_config.NumberColumn("Valor", format="R$ %.2f"), 
+                    "data_vencimento": st.column_config.DateColumn("Vencimento", format="DD/MM/YYYY"),
+                    "status": st.column_config.SelectboxColumn("Status", options=["Pendente", "Pago"])
+                }, 
+                hide_index=True, 
+                use_container_width=True
+            )
+            if st.button("💾 Salvar Alterações da Tabela"):
                 with conn.session as s:
                     for _, row in df_edit_fin.iterrows():
-                        s.execute(text("UPDATE financeiro SET status=:s WHERE id=:id"), {"s": row['status'], "id": int(row['id'])})
-                    s.commit(); st.rerun()
+                        s.execute(text("UPDATE financeiro SET tipo=:t, descricao=:d, valor=:v, data_vencimento=:dt, status=:s WHERE id=:id"), 
+                                  {"t": row['tipo'], "d": row['descricao'], "v": row['valor'], "dt": row['data_vencimento'], "s": row['status'], "id": int(row['id'])})
+                s.commit(); st.rerun()
 
 # --- ABA 4: CURVA ABC ---
 with aba4:
