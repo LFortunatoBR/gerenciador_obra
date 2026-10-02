@@ -210,26 +210,26 @@ with aba1:
         fig = px.timeline(df_tarefas, x_start="plot_ini", x_end="plot_fim", y="nome_servico", color="fase", title="Evolução Lógica")
         fig.update_yaxes(autorange="reversed"); fig.update_layout(height=400, margin=dict(l=0, r=0, t=30, b=0))
         st.plotly_chart(fig, use_container_width=True)
-    # --- PAINEL DE ATUALIZAÇÃO (PERCENTUAL E ATRASOS) ---
-    with st.expander("📝 Atualizar Progresso ou Ajustar Prazos (Atrasos/Antecipações)", expanded=False):
-        # Filtra apenas as tarefas reais (exclui as Macro-etapas/Pastas)
-        tarefas_editaveis = df_tarefas[df_tarefas['parent_id'].notna() | (df_tarefas['parent_id'].isna() & df_tarefas['dependencia_id'].notna())]
-        
-        if not tarefas_editaveis.empty:
-            t_id = st.selectbox("Selecione o Serviço:", tarefas_editaveis['id'], format_func=lambda x: tarefas_editaveis[tarefas_editaveis['id']==x]['nome_servico'].values[0])
-            t_row = tarefas_editaveis[tarefas_editaveis['id'] == t_id].iloc[0]
+        # --- PAINEL DE ATUALIZAÇÃO (PERCENTUAL E ATRASOS) ---
+        with st.expander("📝 Atualizar Progresso ou Ajustar Prazos (Atrasos/Antecipações)", expanded=False):
+            # Filtra apenas as tarefas reais (exclui as Macro-etapas/Pastas)
+            tarefas_editaveis = df_tarefas[df_tarefas['parent_id'].notna() | (df_tarefas['parent_id'].isna() & df_tarefas['dependencia_id'].notna())]
             
-            c_perc, c_data = st.columns(2)
-            novo_perc = c_perc.slider("Percentual de Conclusão (%)", 0, 100, int(t_row['conclusao_percentual']))
-            nova_data_fim = c_data.date_input("Nova Data de Término (Em caso de atraso/antecipação)", value=t_row['data_fim'])
-            
-            if st.button("💾 Salvar Atualização", type="secondary"):
-                with conn.session as s:
-                    s.execute(text("UPDATE tarefas SET conclusao_percentual = :p, data_fim = :df WHERE id = :id"), 
-                              {"p": novo_perc, "df": nova_data_fim, "id": int(t_id)})
-                    s.commit()
-                st.success("Atualizado! Agora clique no botão vermelho 'Recalcular CPM' lá em cima para ajustar a obra toda.")
-                st.rerun()
+            if not tarefas_editaveis.empty:
+                t_id = st.selectbox("Selecione o Serviço:", tarefas_editaveis['id'], format_func=lambda x: tarefas_editaveis[tarefas_editaveis['id']==x]['nome_servico'].values[0])
+                t_row = tarefas_editaveis[tarefas_editaveis['id'] == t_id].iloc[0]
+                
+                c_perc, c_data = st.columns(2)
+                novo_perc = c_perc.slider("Percentual de Conclusão (%)", 0, 100, int(t_row['conclusao_percentual']))
+                nova_data_fim = c_data.date_input("Nova Data de Término (Em caso de atraso/antecipação)", value=t_row['data_fim'])
+                
+                if st.button("💾 Salvar Atualização", type="secondary"):
+                    with conn.session as s:
+                        s.execute(text("UPDATE tarefas SET conclusao_percentual = :p, data_fim = :df WHERE id = :id"), 
+                                  {"p": novo_perc, "df": nova_data_fim, "id": int(t_id)})
+                        s.commit()
+                    st.success("Atualizado! Agora clique no botão vermelho 'Recalcular CPM' lá em cima para ajustar a obra toda.")
+                    st.rerun()
         
         st.subheader("📋 Estrutura Analítica (EAP)")
         df_exib_rows = []
