@@ -59,6 +59,25 @@ with st.sidebar:
         obras_dict = dict(zip(df_obras['id'], df_obras['nome']))
         obra_ativa_id = st.selectbox("Projeto Ativo:", options=list(obras_dict.keys()), format_func=lambda x: obras_dict[x])
         nome_obra_ativa = obras_dict[obra_ativa_id]
+        
+        # --- NOVIDADE: EDITAR E EXCLUIR OBRA ---
+        with st.expander("⚙️ Gerenciar Projeto Atual", expanded=False):
+            novo_nome = st.text_input("Renomear Projeto:", value=nome_obra_ativa)
+            if st.button("💾 Salvar Novo Nome"):
+                with conn.session as s:
+                    s.execute(text("UPDATE obras SET nome = :n WHERE id = :id"), {"n": novo_nome, "id": int(obra_ativa_id)})
+                    s.commit()
+                st.success("Nome atualizado!")
+                st.rerun()
+                
+            st.divider()
+            st.write("⚠️ **Atenção:** Excluir apagará todas as tarefas ligadas a esta obra!")
+            if st.button("🗑️ Excluir Projeto Definitivamente"):
+                with conn.session as s:
+                    s.execute(text("DELETE FROM obras WHERE id = :id"), {"id": int(obra_ativa_id)})
+                    s.commit()
+                st.rerun()
+        # ----------------------------------------
     else:
         st.warning("Nenhum projeto encontrado. Crie um abaixo.")
         
@@ -87,7 +106,7 @@ if not obra_ativa_id:
     st.stop()
 
 # Busca apenas as tarefas do PROJETO ATIVO
-df_tarefas = conn.query("SELECT * FROM tarefas WHERE obra_id = :oid ORDER BY data_inicio;", params={"oid": obra_ativa_id}, ttl=0)
+df_tarefas = conn.query("SELECT * FROM tarefas WHERE obra_id = :oid ORDER BY data_inicio;", params={"oid": int(obra_ativa_id)}, ttl=0)
 
 opcoes_dep = {0: "Nenhuma (Em paralelo)"}
 tarefas_dict = {}
@@ -124,7 +143,6 @@ with aba1:
                 novo_perc = st.slider("Conclusão (%)", 0, 100, perc_atual)
             
             with col_dias:
-                # O input que aciona o Efeito Dominó
                 dias_ajuste = st.number_input("Atraso / Chuva (Dias)", value=0, help="Ao adicionar dias, o banco empurrará esta etapa e todas que dependem dela.")
 
             motivo_bloqueio = None
@@ -143,7 +161,6 @@ with aba1:
             with col_btn:
                 if st.button("Gravar / Reprogramar", disabled=bool(motivo_bloqueio), type="primary"):
                     with conn.session as s:
-                        # Adiciona os dias às datas. O Trigger do banco faz o resto!
                         sql = text("""
                             UPDATE tarefas 
                             SET conclusao_percentual = :p,
@@ -281,7 +298,7 @@ with aba2:
                             else:
                                 with conn.session as s:
                                     s.execute(text("INSERT INTO tarefas (nome_servico, fase, data_inicio, data_fim, conclusao_percentual, custo_previsto, dependencia_id, obra_id) VALUES (:n, :f, :i, :fim, 0, :c, :d, :ob)"),
-                                              {"n": nome_abrev, "f": fase_esc, "i": d_ini, "fim": d_fim, "c": float(row['preco_mediano'])*qtd, "d": None if dep_escolhida==0 else dep_escolhida, "ob": obra_ativa_id})
+                                              {"n": nome_abrev, "f": fase_esc, "i": d_ini, "fim": d_fim, "c": float(row['preco_mediano'])*qtd, "d": None if dep_escolhida==0 else dep_escolhida, "ob": int(obra_ativa_id)})
                                     s.commit()
                                 st.rerun()
 
@@ -301,7 +318,7 @@ with aba3:
             for i, etp in enumerate(kits[kit_sel]):
                 with cols[i]:
                     st.markdown(f"**{etp['nome']}**")
-                    dias_lst.append(st.number_input("Dias", 1, 2, key=f"d_{i}"))
+                    dias_lst.append(st.number_input("Dias", 1, 100, 2, key=f"d_{i}"))
                     custo_lst.append(st.number_input("Custo R$", 0.0, format="%.2f", key=f"c_{i}"))
             dep_m = st.selectbox("Dependência macro?", options=list(opcoes_dep.keys()), format_func=lambda x: opcoes_dep[x])
             
@@ -312,7 +329,7 @@ with aba3:
                     for i, etp in enumerate(kits[kit_sel]):
                         fim_calc = curr_date + timedelta(days=dias_lst[i] - 1)
                         res = s.execute(text("INSERT INTO tarefas (nome_servico, fase, data_inicio, data_fim, conclusao_percentual, custo_previsto, dependencia_id, obra_id) VALUES (:n, :f, :i, :fim, 0, :c, :d, :ob) RETURNING id"),
-                                        {"n": etp['nome'], "f": etp['fase'], "i": curr_date, "fim": fim_calc, "c": custo_lst[i], "d": curr_dep, "ob": obra_ativa_id})
+                                        {"n": etp['nome'], "f": etp['fase'], "i": curr_date, "fim": fim_calc, "c": custo_lst[i], "d": curr_dep, "ob": int(obra_ativa_id)})
                         curr_dep = res.scalar()
                         curr_date = fim_calc + timedelta(days=1)
                     s.commit()
@@ -327,6 +344,6 @@ with aba3:
             if st.form_submit_button("Salvar Manual"):
                 with conn.session as s:
                     s.execute(text("INSERT INTO tarefas (nome_servico, fase, data_inicio, data_fim, conclusao_percentual, custo_previsto, dependencia_id, obra_id) VALUES (:n, :f, :i, :fim, 0, :c, :d, :ob)"),
-                              {"n": n, "f": f, "i": i, "fim": fm, "c": c, "d": None if d==0 else d, "ob": obra_ativa_id})
+                              {"n": n, "f": f, "i": i, "fim": fm, "c": c, "d": None if d==0 else d, "ob": int(obra_ativa_id)})
                     s.commit()
                 st.rerun()
