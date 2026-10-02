@@ -153,8 +153,11 @@ aba1, aba4, aba2, aba3 = st.tabs(["📊 Gantt & EAP", "📈 Curva S (Baseline)",
 with aba1:
     col_met, col_btn = st.columns([3, 1])
     with col_met:
-        custo_total = df_tarefas['custo_previsto'].sum() if not df_tarefas.empty else 0
-        st.metric("Custo Total (Projeto)", f"R$ {custo_total:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+        # CORREÇÃO CRÍTICA: Somar apenas tarefas raiz (sem parent_id) para não duplicar o custo das filhas!
+        df_top_level = df_tarefas[df_tarefas['parent_id'].isna()]
+        custo_total = df_top_level['custo_previsto'].sum() if not df_top_level.empty else 0
+        st.metric("Custo Total Real (Projeto)", f"R$ {custo_total:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+        
     with col_btn:
         st.write("")
         if st.button("🔄 Recalcular Cronograma (CPM)", type="primary", use_container_width=True):
@@ -172,16 +175,61 @@ with aba1:
         fig.update_yaxes(autorange="reversed"); fig.update_layout(height=400, margin=dict(l=0, r=0, t=30, b=0))
         st.plotly_chart(fig, use_container_width=True)
         
-        # --- TABELA EAP ---
+        # --- TABELA EAP (COM TOTAIS PARCIAIS E GERAL) ---
         st.subheader("📋 Estrutura Analítica do Projeto (EAP)")
-        df_eap = df_tarefas.copy()
-        # Coloca a setinha para quem é filha
-        df_eap['Serviço'] = df_eap.apply(lambda r: "  ↳ " + r['nome_servico'] if pd.notna(r['parent_id']) else "📦 " + r['nome_servico'], axis=1)
-        df_eap['Início'] = pd.to_datetime(df_eap['data_inicio']).dt.strftime('%d/%m/%Y')
-        df_eap['Fim'] = pd.to_datetime(df_eap['data_fim']).dt.strftime('%d/%m/%Y')
         
-        df_exib = df_eap[["id", "Serviço", "Início", "Fim", "conclusao_percentual", "custo_previsto"]].copy()
-        st.data_editor(df_exib, column_config={"id": None, "conclusao_percentual": st.column_config.NumberColumn("Conclusão %", disabled=True), "custo_previsto": st.column_config.NumberColumn("Custo R$", format="R$ %.2f")}, hide_index=True, use_container_width=True)
+        df_exib_rows = []
+        fases = df_tarefas['fase'].unique()
+        
+        for fase in fases:
+            df_fase = df_tarefas[df_tarefas['fase'] == fase]
+            
+            # Adiciona as tarefas individuais desta fase
+            for _, row in df_fase.iterrows():
+                servico_nome = "  ↳ " + row['nome_servico'] if pd.notna(row['parent_id']) else "📦 " + row['nome_servico']
+                df_exib_rows.append({
+                    "id": row['id'],
+                    "Serviço": servico_nome,
+                    "Início": pd.to_datetime(row['data_inicio']).strftime('%d/%m/%Y'),
+                    "Fim": pd.to_datetime(row['data_fim']).strftime('%d/%m/%Y'),
+                    "conclusao_percentual": row['conclusao_percentual'],
+                    "custo_previsto": row['custo_previsto']
+                })
+                
+            # Calcula o Subtotal da Fase (Soma apenas as tarefas raízes desta fase)
+            total_fase = df_fase[df_fase['parent_id'].isna()]['custo_previsto'].sum()
+            df_exib_rows.append({
+                "id": None,
+                "Serviço": f"➤ SUBTOTAL DA FASE: {fase.upper()}",
+                "Início": "",
+                "Fim": "",
+                "conclusao_percentual": None,
+                "custo_previsto": total_fase
+            })
+            
+        # Adiciona a linha de Total Geral no rodapé da tabela
+        df_exib_rows.append({
+            "id": None,
+            "Serviço": "⭐ TOTAL GERAL DA OBRA",
+            "Início": "",
+            "Fim": "",
+            "conclusao_percentual": None,
+            "custo_previsto": custo_total
+        })
+        
+        df_exib = pd.DataFrame(df_exib_rows)
+        
+        # Usamos st.dataframe para que o utilizador não tente editar acidentalmente as linhas de subtotal
+        st.dataframe(
+            df_exib, 
+            column_config={
+                "id": None, 
+                "conclusao_percentual": st.column_config.NumberColumn("Conclusão %", format="%d"), 
+                "custo_previsto": st.column_config.NumberColumn("Custo R$", format="R$ %.2f")
+            }, 
+            hide_index=True, 
+            use_container_width=True
+        )
 
 # ==========================================
 # ABA 4: CURVA S E LINHA DE BASE
