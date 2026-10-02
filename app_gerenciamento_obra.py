@@ -99,22 +99,29 @@ def gerar_tabela_pdf(pdf, df, col_widths, col_names, base_x=10, orient="P", max_
 # --- LISTAS E FUNÇÕES DO CPM ---
 FASES_DA_OBRA = list(CORES_FASES.keys())
 
-def add_bus_days(start_date, days):
+def add_bus_days(start_date, days, dias_impedidos=[]):
     if days == 0: return start_date
     current = start_date; added = 0; step = 1 if days > 0 else -1
     while added < abs(days):
         current += timedelta(days=step)
-        if current.weekday() < 5: added += 1
+        # Só soma o dia se não for fim de semana E não estiver na lista de Chuva Impeditiva do RDO
+        if current.weekday() < 5 and current not in dias_impedidos: 
+            added += 1
     return current
 
-def bus_days_between(start, end):
+def bus_days_between(start, end, dias_impedidos=[]):
     days = 0; curr = start
     while curr < end:
-        if curr.weekday() < 5: days += 1
+        if curr.weekday() < 5 and curr not in dias_impedidos: 
+            days += 1
         curr += timedelta(days=1)
     return days
 
 def rodar_motor_cpm(conn, obra_id):
+    # 1. Busca os dias de chuva impeditiva do RDO
+    df_chuva = conn.query("SELECT data_relatorio FROM rdo WHERE obra_id = :oid AND clima = 'Chuva Impeditiva'", params={"oid": obra_id}, ttl=0)
+    dias_chuva = pd.to_datetime(df_chuva['data_relatorio']).dt.date.tolist() if not df_chuva.empty else []
+
     with conn.session as s:
         result = s.execute(text("SELECT * FROM tarefas WHERE obra_id = :oid"), {"oid": obra_id}).mappings().all()
         t_dict = {t['id']: dict(t) for t in result}
@@ -127,23 +134,30 @@ def rodar_motor_cpm(conn, obra_id):
                     if pred:
                         lag = t['lag_dias'] or 0; tipo = t['tipo_dep'] or 'TI'
                         nova_ini = t['data_inicio']
-                        if tipo == 'TI': nova_ini = add_bus_days(pred['data_fim'], lag + 1)
-                        elif tipo == 'II': nova_ini = add_bus_days(pred['data_inicio'], lag)
+                        # O motor agora usa os 'dias_chuva' para empurrar o cronograma automaticamente!
+                        if tipo == 'TI': nova_ini = add_bus_days(pred['data_fim'], lag + 1, dias_chuva)
+                        elif tipo == 'II': nova_ini = add_bus_days(pred['data_inicio'], lag, dias_chuva)
+                        
                         if nova_ini != t['data_inicio']:
-                            duracao = bus_days_between(t['data_inicio'], t['data_fim'])
-                            t['data_inicio'], t['data_fim'] = nova_ini, add_bus_days(nova_ini, max(0, duracao))
+                            duracao = bus_days_between(t['data_inicio'], t['data_fim'], dias_chuva)
+                            t['data_inicio'] = nova_ini
+                            t['data_fim'] = add_bus_days(nova_ini, max(0, duracao), dias_chuva)
                             mudou = True
+                            
+        # Atualiza as Macro-etapas
         parents = set(t['parent_id'] for t in t_dict.values() if t['parent_id'])
         for p_id in parents:
             children = [t for t in t_dict.values() if t['parent_id'] == p_id]
             if children and p_id in t_dict:
-                min_ini, max_fim = min(c['data_inicio'] for c in children), max(c['data_fim'] for c in children)
+                min_ini = min(c['data_inicio'] for c in children)
+                max_fim = max(c['data_fim'] for c in children)
                 sum_c = sum(c['custo_previsto'] or 0 for c in children)
                 total_c = sum_c if sum_c > 0 else len(children)
                 sum_perc = sum((c['conclusao_percentual']*(c['custo_previsto'] or 1))/total_c for c in children) if sum_c>0 else sum(c['conclusao_percentual'] for c in children)/len(children)
                 if (t_dict[p_id]['data_inicio'] != min_ini or t_dict[p_id]['data_fim'] != max_fim or t_dict[p_id]['custo_previsto'] != sum_c or t_dict[p_id]['conclusao_percentual'] != int(sum_perc)):
                     t_dict[p_id]['data_inicio'], t_dict[p_id]['data_fim'], t_dict[p_id]['custo_previsto'], t_dict[p_id]['conclusao_percentual'] = min_ini, max_fim, float(sum_c), int(sum_perc)
                     mudou = True
+                    
         for t_id, t in t_dict.items():
             s.execute(text("UPDATE tarefas SET data_inicio=:i, data_fim=:f, custo_previsto=:c, conclusao_percentual=:p WHERE id=:id"), {"i": t['data_inicio'], "f": t['data_fim'], "c": float(t['custo_previsto'] or 0), "p": int(t['conclusao_percentual'] or 0), "id": t_id})
         s.commit()
@@ -524,9 +538,36 @@ with aba2:
                           {"o": int(obra_ativa_id), "d": hoje, "v": float(saldo), "p": (ev_venda/preco_venda)*100 if preco_venda>0 else 0})
                 s.commit(); st.rerun()
 
-# --- ABA 3: FLUXO DE CAIXA ---
+# --- ABA 3: FLUXO DE CAIXA E DATAVIZ ---
 with aba3:
-    st.header("💸 Controle de Caixa (Financeiro)")
+    st.header("💸 Controle de Caixa e Dashboard Financeiro")
+    
+    df_fin = conn.query("SELECT id, tipo, descricao, valor, data_vencimento, status FROM financeiro WHERE obra_id = :oid ORDER BY data_vencimento", params={"oid": int(obra_ativa_id)}, ttl=0)
+    
+    # 📊 NOVO DASHBOARD FINANCEIRO (MÉTRICAS E GRÁFICOS)
+    if not df_fin.empty:
+        rec_pago = df_fin[(df_fin['tipo']=='Receita') & (df_fin['status']=='Pago')]['valor'].sum()
+        des_pago = df_fin[(df_fin['tipo']=='Despesa') & (df_fin['status']=='Pago')]['valor'].sum()
+        des_pendente = df_fin[(df_fin['tipo']=='Despesa') & (df_fin['status']=='Pendente')]['valor'].sum()
+        
+        c_m1, c_m2, c_m3 = st.columns(3)
+        c_m1.metric("Saldo Real em Caixa", f"R$ {rec_pago - des_pago:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+        c_m2.metric("Despesas Pagas", f"R$ {des_pago:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+        c_m3.metric("Contas a Pagar (Pendentes)", f"R$ {des_pendente:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."), delta="-Saída Futura", delta_color="inverse")
+        
+        st.write("📈 **Projeção de Fluxo Mensal (Receitas vs Despesas)**")
+        df_graf_fin = df_fin.copy()
+        # Converte a data para capturar apenas Mês e Ano para agrupamento
+        df_graf_fin['mes_ano'] = pd.to_datetime(df_graf_fin['data_vencimento']).dt.strftime('%m/%Y')
+        df_agrupado = df_graf_fin.groupby(['mes_ano', 'tipo'])['valor'].sum().reset_index()
+        
+        fig_fin = px.bar(df_agrupado, x='mes_ano', y='valor', color='tipo', barmode='group', 
+                         color_discrete_map={'Receita': '#27ae60', 'Despesa': '#c0392b'},
+                         labels={'mes_ano': 'Mês de Vencimento', 'valor': 'Montante (R$)'})
+        fig_fin.update_layout(height=300, margin=dict(l=0, r=0, t=30, b=0), yaxis_tickformat="R$ ,.2f")
+        st.plotly_chart(fig_fin, use_container_width=True)
+        st.divider()
+
     c_f1, c_f2 = st.columns([1, 2])
     with c_f1:
         st.subheader("Lançar Novo Título")
@@ -542,70 +583,49 @@ with aba3:
                               {"o": int(obra_ativa_id), "t": f_tipo, "d": f_desc, "v": f_val, "dt": f_venc, "s": f_stat})
                     s.commit(); st.rerun()
                     
-        # --- PAINEL DE EXCLUSÃO ---
-        df_fin_delete = conn.query("SELECT id, tipo, descricao, valor FROM financeiro WHERE obra_id = :oid ORDER BY data_vencimento", params={"oid": int(obra_ativa_id)}, ttl=0)
-        if not df_fin_delete.empty:
+        if not df_fin.empty:
             st.divider()
             st.subheader("🗑️ Excluir Lançamento")
             with st.form("form_delete_fin"):
                 fin_id_del = st.selectbox(
                     "Selecione o registro para apagar:", 
-                    df_fin_delete['id'], 
-                    format_func=lambda x: f"{df_fin_delete[df_fin_delete['id']==x]['tipo'].values[0][:3].upper()} - {df_fin_delete[df_fin_delete['id']==x]['descricao'].values[0]} (R$ {df_fin_delete[df_fin_delete['id']==x]['valor'].values[0]:.2f})"
+                    df_fin['id'], 
+                    format_func=lambda x: f"{df_fin[df_fin['id']==x]['tipo'].values[0][:3].upper()} - {df_fin[df_fin['id']==x]['descricao'].values[0]} (R$ {df_fin[df_fin['id']==x]['valor'].values[0]:.2f})"
                 )
                 if st.form_submit_button("Excluir Definitivamente"):
                     with conn.session as s:
                         s.execute(text("DELETE FROM financeiro WHERE id=:id"), {"id": int(fin_id_del)})
                         s.commit()
-                    st.success("Lançamento excluído com sucesso!")
-                    st.rerun()
+                    st.success("Lançamento excluído com sucesso!"); st.rerun()
                 
     with c_f2:
-        df_fin = conn.query("SELECT id, tipo, descricao, valor, data_vencimento, status FROM financeiro WHERE obra_id = :oid ORDER BY data_vencimento", params={"oid": int(obra_ativa_id)}, ttl=0)
         if not df_fin.empty:
-            rec_pago = df_fin[(df_fin['tipo']=='Receita') & (df_fin['status']=='Pago')]['valor'].sum()
-            des_pago = df_fin[(df_fin['tipo']=='Despesa') & (df_fin['status']=='Pago')]['valor'].sum()
-            st.metric("Saldo Real em Caixa (Recebido - Pago)", f"R$ {rec_pago - des_pago:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
-            
             if st.button("📄 Gerar PDF do Livro Caixa"):
+                # (O CÓDIGO DO PDF DO CAIXA FICA EXATAMENTE IGUAL AQUI)
                 pdf = FPDF(orientation="P", unit="mm", format="A4")
                 pdf.add_page()
                 pdf.set_fill_color(41, 128, 185); pdf.set_text_color(255, 255, 255); pdf.set_font("Arial", "B", 16)
                 pdf.cell(190, 12, remover_acentos(f"Controle de Caixa - {obras_dict[obra_ativa_id]}"), ln=True, align="C", fill=True)
                 pdf.ln(5)
-                
                 pdf.set_font("Arial", "B", 12); pdf.set_text_color(40,40,40)
                 pdf.cell(190, 8, remover_acentos(f"Saldo em Caixa: R$ {rec_pago - des_pago:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")), ln=True)
                 pdf.ln(5)
-                
                 df_pdf_fin = df_fin.drop(columns=['id']).copy()
                 df_pdf_fin['valor'] = df_pdf_fin['valor'].apply(lambda x: f"R$ {float(x):,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
                 df_pdf_fin['data_vencimento'] = pd.to_datetime(df_pdf_fin['data_vencimento']).dt.strftime('%d/%m/%Y')
-                
                 gerar_tabela_pdf(pdf, df_pdf_fin, [25, 75, 35, 25, 25], ["Tipo", "Descricao", "Valor", "Vencimento", "Status"], base_x=12.5, orient="P", max_y=275)
-                
                 pdf.output("relatorio_caixa.pdf")
                 with open("relatorio_caixa.pdf", "rb") as f: st.download_button("⬇️ Baixar PDF (Caixa)", data=f.read(), file_name="Financeiro.pdf", mime="application/pdf")
             
-            st.write("Edite qualquer campo diretamente na tabela abaixo (Duplo Clique) e clique em Salvar.")
+            st.write("Edite qualquer campo diretamente na tabela abaixo e clique em Salvar.")
             df_edit_fin = st.data_editor(
                 df_fin, 
-                column_config={
-                    "id": None, 
-                    "tipo": st.column_config.SelectboxColumn("Tipo", options=["Despesa", "Receita"]), 
-                    "descricao": st.column_config.TextColumn("Descrição"),
-                    "valor": st.column_config.NumberColumn("Valor", format="R$ %.2f"), 
-                    "data_vencimento": st.column_config.DateColumn("Vencimento", format="DD/MM/YYYY"),
-                    "status": st.column_config.SelectboxColumn("Status", options=["Pendente", "Pago"])
-                }, 
-                hide_index=True, 
-                use_container_width=True
-            )
+                column_config={"id": None, "tipo": st.column_config.SelectboxColumn("Tipo", options=["Despesa", "Receita"]), "descricao": st.column_config.TextColumn("Descrição"), "valor": st.column_config.NumberColumn("Valor", format="R$ %.2f"), "data_vencimento": st.column_config.DateColumn("Vencimento", format="DD/MM/YYYY"), "status": st.column_config.SelectboxColumn("Status", options=["Pendente", "Pago"])}, 
+                hide_index=True, use_container_width=True)
             if st.button("💾 Salvar Alterações da Tabela"):
                 with conn.session as s:
                     for _, row in df_edit_fin.iterrows():
-                        s.execute(text("UPDATE financeiro SET tipo=:t, descricao=:d, valor=:v, data_vencimento=:dt, status=:s WHERE id=:id"), 
-                                  {"t": row['tipo'], "d": row['descricao'], "v": row['valor'], "dt": row['data_vencimento'], "s": row['status'], "id": int(row['id'])})
+                        s.execute(text("UPDATE financeiro SET tipo=:t, descricao=:d, valor=:v, data_vencimento=:dt, status=:s WHERE id=:id"), {"t": row['tipo'], "d": row['descricao'], "v": row['valor'], "dt": row['data_vencimento'], "s": row['status'], "id": int(row['id'])})
                 s.commit(); st.rerun()
 
 # --- ABA 4: CURVA ABC ---
@@ -707,28 +727,39 @@ with aba5:
 # --- ABA 6: SINAPI ---
 with aba6:
     st.subheader("Adicionar do SINAPI")
+    
+    # 🚀 NOVA FUNÇÃO COM CACHE (Guarda o resultado por 1 hora)
+    @st.cache_data(ttl=3600)
+    def buscar_sinapi_cache(busca_texto, tabela):
+        # Usamos uma query pura aqui pois st.cache_data funciona melhor retornando DataFrames limpos
+        return conn.query(f"SELECT codigo, descricao, unidade, preco_mediano FROM {tabela} WHERE descricao ILIKE '%{busca_texto}%' LIMIT 15;", ttl=0)
+
     tipo_busca = st.radio("O que deseja orçar?", ["Serviços Completos (Composições)", "Materiais Isolados (Insumos)"])
     busca = st.text_input("🔍 Buscar (ex: Alvenaria)")
+    
     if busca:
         tabela_alvo = "sinapi_composicoes" if "Serviços" in tipo_busca else "sinapi_insumos"
-        df_sinapi = conn.query(f"SELECT codigo, descricao, unidade, preco_mediano FROM {tabela_alvo} WHERE descricao ILIKE '%{busca}%' LIMIT 15;", ttl=600)
+        # O sistema agora chama a função com cache! Instantâneo nas buscas repetidas.
+        df_sinapi = buscar_sinapi_cache(busca, tabela_alvo)
+        
         for index, row in df_sinapi.iterrows():
             with st.expander(f"📦 {row['descricao'][:60]}... | R$ {float(row['preco_mediano']):.2f} / {row['unidade']}"):
                 with st.form(f"add_sinapi_{index}"):
                     c1, c2 = st.columns(2)
                     qtd = c1.number_input("Quantidade", min_value=0.1, value=1.0)
                     fase_esc = c2.selectbox("Fase", FASES_DA_OBRA)
-                    c3, c4 = st.columns(2)
+                    c3, c4, c5 = st.columns(3)
                     d_ini, d_fim = c3.date_input("Início"), c4.date_input("Término")
+                    equipe = c5.number_input("Tamanho da Equipe", min_value=0, value=2, help="Quantos trabalhadores simultâneos?")
                     n_abrev = st.text_input("Nome", value=row['descricao'][:50].title())
                     dep_esc = st.selectbox("Depende de?", options=list(opcoes_dep.keys()), format_func=lambda x: opcoes_dep[x])
                     if st.form_submit_button("➕ Adicionar"):
                         if d_ini > d_fim: st.error("Erro nas datas!")
                         else:
                             with conn.session as s:
-                                s.execute(text("""INSERT INTO tarefas (nome_servico, fase, data_inicio, data_fim, conclusao_percentual, custo_previsto, dependencia_id, obra_id, codigo_sinapi, quantidade_sinapi) 
-                                                  VALUES (:n, :f, :i, :fim, 0, :c, :d, :ob, :cod, :qs)"""),
-                                          {"n": n_abrev, "f": fase_esc, "i": d_ini, "fim": d_fim, "c": float(row['preco_mediano'])*qtd, "d": None if dep_esc==0 else dep_esc, "ob": int(obra_ativa_id), "cod": row['codigo'], "qs": qtd})
+                                s.execute(text("""INSERT INTO tarefas (nome_servico, fase, data_inicio, data_fim, conclusao_percentual, custo_previsto, dependencia_id, obra_id, codigo_sinapi, quantidade_sinapi, equipe_necessaria) 
+                                                  VALUES (:n, :f, :i, :fim, 0, :c, :d, :ob, :cod, :qs, :eq)"""),
+                                          {"n": n_abrev, "f": fase_esc, "i": d_ini, "fim": d_fim, "c": float(row['preco_mediano'])*qtd, "d": None if dep_esc==0 else dep_esc, "ob": int(obra_ativa_id), "cod": row['codigo'], "qs": qtd, "eq": equipe})
                                 s.commit()
                             st.rerun()
 
