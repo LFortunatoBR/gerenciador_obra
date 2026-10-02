@@ -217,6 +217,49 @@ if obra_ativa_id == 0:
         c3.metric("Lucro Bruto Projetado", f"R$ {(df_resumo['Preço Venda'].sum() - df_resumo['Custo Total'].sum()):,.2f}")
         fig_dash = px.bar(df_resumo, x="Obra", y="Avanço Físico (%)", text="Avanço Físico (%)", color="Avanço Físico (%)", color_continuous_scale="RdYlGn", range_y=[0, 100])
         st.plotly_chart(fig_dash, use_container_width=True)
+        
+    else:
+        st.info("Nenhuma obra encontrada. Crie um novo projeto na barra lateral.")
+        
+    st.divider()
+    
+    # --- ÁREA DE GESTÃO E EXCLUSÃO DE PROJETOS ---
+    st.subheader("🗑️ Gestão de Dados e Exclusão de Projetos")
+    st.write("Atenção: A exclusão de um projeto é permanente e apagará todas as tarefas, finanças e medições associadas.")
+    
+    try:
+        df_obras_gestao = conn.query("SELECT id, nome FROM obras ORDER BY id;", ttl=0)
+    except Exception as e:
+        df_obras_gestao = pd.DataFrame()
+        
+    if not df_obras_gestao.empty:
+        with st.expander("Abrir Painel de Exclusão de Projetos", expanded=False):
+            with st.form("form_excluir_projetos"):
+                # Cria checkboxes para selecionar múltiplos projetos
+                projetos_para_excluir = st.multiselect(
+                    "Selecione os projetos que deseja DELETAR TOTALMENTE:",
+                    options=df_obras_gestao['id'].tolist(),
+                    format_func=lambda x: df_obras_gestao[df_obras_gestao['id'] == x]['nome'].values[0]
+                )
+                
+                # Checkbox de confirmação de segurança
+                confirmacao = st.checkbox("Tenho certeza de que desejo apagar permanentemente os dados selecionados.")
+                
+                # Botão de exclusão (formatado em vermelho para chamar atenção)
+                if st.form_submit_button("Excluir Projetos Selecionados", type="primary"):
+                    if not projetos_para_excluir:
+                        st.warning("Selecione pelo menos um projeto para excluir.")
+                    elif not confirmacao:
+                        st.error("Por favor, marque a caixa de confirmação de segurança.")
+                    else:
+                        with conn.session as s:
+                            for p_id in projetos_para_excluir:
+                                # O ON DELETE CASCADE no banco (configurado no Passo 1 da migração)
+                                # garante que tarefas, RDO, finanças e medições sejam apagadas automaticamente.
+                                s.execute(text("DELETE FROM obras WHERE id = :id"), {"id": int(p_id)})
+                            s.commit()
+                        st.success(f"{len(projetos_para_excluir)} projeto(s) excluído(s) com sucesso!")
+                        st.rerun()
     st.stop()
 
 # ==========================================
