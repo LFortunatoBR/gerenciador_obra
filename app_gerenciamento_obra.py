@@ -45,6 +45,7 @@ with aba1:
         custo_total = df_tarefas['custo_previsto'].sum()
         st.metric(label="Custo Total Previsto da Obra", value=f"R$ {custo_total:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
         
+        # Converte as datas para o gráfico funcionar
         df_tarefas['data_inicio'] = pd.to_datetime(df_tarefas['data_inicio'])
         df_tarefas['data_fim'] = pd.to_datetime(df_tarefas['data_fim'])
         
@@ -56,10 +57,38 @@ with aba1:
         fig.update_layout(height=400, margin=dict(l=0, r=0, t=30, b=0))
         st.plotly_chart(fig, use_container_width=True)
         
+        # --- Formatação da Tabela para Exibição ---
+        # 1. Cria uma cópia com os nomes das colunas mais limpos
         df_exibicao = df_tarefas[["nome_servico", "fase", "data_inicio", "data_fim", "custo_previsto", "conclusao_percentual"]].copy()
-        df_exibicao['data_inicio'] = df_exibicao['data_inicio'].dt.strftime('%d/%m/%Y')
-        df_exibicao['data_fim'] = df_exibicao['data_fim'].dt.strftime('%d/%m/%Y')
-        st.dataframe(df_exibicao, hide_index=True)
+        df_exibicao.columns = ["Serviço", "Fase", "Início", "Término", "Custo Previsto", "Conclusão (%)"]
+        
+        # 2. Formata as datas para o padrão brasileiro (DD/MM/AAAA)
+        df_exibicao['Início'] = df_exibicao['Início'].dt.strftime('%d/%m/%Y')
+        df_exibicao['Término'] = df_exibicao['Término'].dt.strftime('%d/%m/%Y')
+        
+        # 3. Adiciona a linha de TOTAL no final
+        nova_linha_total = pd.DataFrame([{
+            "Serviço": "TOTAL DA OBRA", 
+            "Fase": "-", 
+            "Início": "-", 
+            "Término": "-", 
+            "Custo Previsto": custo_total, 
+            "Conclusão (%)": "-"
+        }])
+        df_exibicao = pd.concat([df_exibicao, nova_linha_total], ignore_index=True)
+        
+        # 4. Formata a coluna de custo com o R$, ponto de milhar e vírgula decimal
+        def formatar_moeda(valor):
+            try:
+                # Formata com 2 casas decimais e separador de milhar americano, depois inverte ponto e vírgula
+                return f"R$ {float(valor):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+            except:
+                return valor
+
+        df_exibicao['Custo Previsto'] = df_exibicao['Custo Previsto'].apply(formatar_moeda)
+        
+        # 5. Exibe a tabela bonitona
+        st.dataframe(df_exibicao, hide_index=True, use_container_width=True)
     else:
         st.info("Nenhuma tarefa cadastrada.")
 
