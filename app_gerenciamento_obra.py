@@ -208,7 +208,7 @@ if not df_tarefas.empty:
 
 aba1, aba2, aba3, aba4, aba5, aba6, aba7 = st.tabs(["📊 Gantt & EAP", "📈 Curva S (Medição)", "💸 Financeiro", "🛒 Insumos (Curva ABC)", "📖 RDO", "💰 SINAPI", "⚙️ Planejar"])
 
-# --- ABA 1: GANTT E ATUALIZAÇÃO ---
+# --- ABA 1: GANTT, ATUALIZAÇÃO, TABELA EAP E PDF ---
 with aba1:
     col_met1, col_met2, col_btn = st.columns([2, 2, 1])
     df_top_level = df_tarefas[df_tarefas['parent_id'].isna()]
@@ -242,13 +242,87 @@ with aba1:
         fig = px.timeline(df_tarefas, x_start="data_inicio", x_end="data_fim", y="nome_servico", color="fase", title="Evolução Lógica")
         fig.update_yaxes(autorange="reversed"); fig.update_layout(height=400, margin=dict(l=0, r=0, t=30, b=0))
         st.plotly_chart(fig, use_container_width=True)
+        
+        # TABELA EAP
+        st.subheader("📋 Estrutura Analítica (EAP)")
+        df_exib_rows = []
+        fases_presentes = sorted(df_tarefas['fase'].unique(), key=lambda x: FASES_DA_OBRA.index(x) if x in FASES_DA_OBRA else 999)
+        
+        for fase in fases_presentes:
+            df_fase = df_tarefas[df_tarefas['fase'] == fase]
+            for _, row in df_fase.iterrows():
+                df_exib_rows.append({
+                    "id": row['id'], "Serviço": ("  ↳ " if pd.notna(row['parent_id']) else "📦 ") + row['nome_servico'],
+                    "Início": pd.to_datetime(row['data_inicio']).strftime('%d/%m/%Y'), "Fim": pd.to_datetime(row['data_fim']).strftime('%d/%m/%Y'),
+                    "Conc. %": row['conclusao_percentual'], "Custo (R$)": row['custo_previsto'], "Venda (R$)": float(row['custo_previsto']) * (1 + (taxa_bdi/100))
+                })
+            t_custo = df_fase[df_fase['parent_id'].isna()]['custo_previsto'].sum()
+            df_exib_rows.append({"id": None, "Serviço": f"➤ SUBTOTAL: {fase.upper()}", "Início": "", "Fim": "", "Conc. %": None, "Custo (R$)": t_custo, "Venda (R$)": t_custo * (1 + (taxa_bdi/100))})
+            
+        df_exib_rows.append({"id": None, "Serviço": "⭐ TOTAL GERAL", "Início": "", "Fim": "", "Conc. %": None, "Custo (R$)": custo_total, "Venda (R$)": preco_venda})
+        df_exib = pd.DataFrame(df_exib_rows)
+        st.dataframe(df_exib, column_config={"id": None, "Custo (R$)": st.column_config.NumberColumn(format="R$ %.2f"), "Venda (R$)": st.column_config.NumberColumn(format="R$ %.2f")}, hide_index=True, use_container_width=True)
+
+        # PDF DUPLO EAP COM O NOVO MOTOR
+        st.divider()
+        st.write("📄 **Exportar Cronogramas (A4 Alta Resolução com Quebra Automática)**")
+        c_pdf1, c_pdf2 = st.columns(2)
+        tipo_pdf = "interno" if c_pdf1.button("🔒 Gerar PDF Interno (Custos)") else ("cliente" if c_pdf2.button("💼 Gerar PDF Cliente (Venda)") else None)
+            
+        if tipo_pdf:
+            with st.spinner("Desenhando gráfico e processando PDF..."):
+                import matplotlib.pyplot as plt
+                import matplotlib.dates as mdates
+                fig_pdf, ax = plt.subplots(figsize=(10, 4), dpi=150)
+                df_grafico = df_tarefas.copy().sort_values(by='data_inicio', ascending=False)
+                for idx, row in df_grafico.iterrows():
+                    ax.barh(row['nome_servico'], mdates.date2num(row['data_fim']) - mdates.date2num(row['data_inicio']), left=mdates.date2num(row['data_inicio']), color="#b0bec5", edgecolor='black')
+                ax.xaxis_date(); ax.xaxis.set_major_formatter(mdates.DateFormatter('%d/%m/%Y'))
+                plt.xticks(rotation=45, ha='right', fontsize=8); plt.yticks(fontsize=8); plt.tight_layout()
+                caminho_img = "gantt_temp.png"
+                plt.savefig(caminho_img); plt.close(fig_pdf)
+
+                pdf = FPDF(orientation="L", unit="mm", format="A4")
+                pdf.add_page(); pdf.set_font("Arial", "B", 16)
+                pdf.set_fill_color(41, 128, 185); pdf.set_text_color(255, 255, 255)
+                pdf.cell(277, 12, remover_acentos(f"Cronograma Oficial - {obras_dict[obra_ativa_id]}"), ln=True, align="C", fill=True)
+                pdf.ln(5)
+                
+                pdf.set_font("Arial", "B", 12); pdf.set_text_color(40, 40, 40)
+                titulo_valor = f"Custo Estimado: R$ {custo_total:,.2f}" if tipo_pdf == "interno" else f"Preco Total da Obra: R$ {preco_venda:,.2f}"
+                pdf.cell(277, 10, remover_acentos(titulo_valor.replace(",", "X").replace(".", ",").replace("X", ".")), ln=True, align="C")
+                pdf.image(caminho_img, x=15, w=260); pdf.ln(5)
+                
+                # Prepara DataFrame para a Tabela Bonita
+                df_pdf_eap = df_exib.drop(columns=['id']).copy()
+                
+                if tipo_pdf == "interno":
+                    df_pdf_eap = df_pdf_eap.drop(columns=['Venda (R$)'])
+                    df_pdf_eap['Custo (R$)'] = df_pdf_eap['Custo (R$)'].apply(lambda x: f"R$ {float(x):,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+                    col_names = ["Servico", "Inicio", "Termino", "Conc.", "Custo"]
+                else:
+                    df_pdf_eap = df_pdf_eap.drop(columns=['Custo (R$)'])
+                    df_pdf_eap['Venda (R$)'] = df_pdf_eap['Venda (R$)'].apply(lambda x: f"R$ {float(x):,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+                    col_names = ["Servico", "Inicio", "Termino", "Conc.", "Valor (Venda)"]
+                    
+                df_pdf_eap['Conc. %'] = df_pdf_eap['Conc. %'].apply(lambda x: f"{int(x)}%" if pd.notna(x) else "")
+                
+                # Gera tabela centralizada (Largura total 240, sobra 57, logo x=28.5)
+                gerar_tabela_pdf(pdf, df_pdf_eap, [130, 25, 25, 20, 40], col_names, base_x=28.5)
+                
+                pdf.output("relatorio_gantt.pdf")
+                with open("relatorio_gantt.pdf", "rb") as f: st.session_state['pdf_gantt'] = f.read()
+                try: os.remove(caminho_img)
+                except: pass
+                
+        if 'pdf_gantt' in st.session_state:
+            st.download_button("⬇️ Baixar PDF do Cronograma", data=st.session_state['pdf_gantt'], file_name="Cronograma_EAP.pdf", mime="application/pdf")
 
 # --- ABA 2: CURVA S E MEDIÇÃO ---
 with aba2:
     st.header("📈 Medição e Curva S")
     df_base = df_tarefas[df_tarefas['base_inicio'].notna()].copy()
     
-    # 1. CÁLCULO DOS DADOS DA CURVA S (Sempre executa para evitar NameError)
     ev_venda = sum(float(r['custo_previsto']) * (1 + (taxa_bdi/100)) * (r['conclusao_percentual']/100) for _, r in df_tarefas.iterrows())
     datas_g, pv_acumulado = [], []
     
@@ -264,7 +338,6 @@ with aba2:
                         c_dia += (float(r['base_custo']) * (1 + (taxa_bdi/100))) / (bus_days_between(r['base_inicio'], r['base_fim']) + 1)
             acc += c_dia; pv_acumulado.append(acc)
     
-    # 2. BOTÃO DE PDF 
     if st.button("📄 Gerar PDF da Curva S e Medição"):
         with st.spinner("Gerando PDF da Curva S..."):
             import matplotlib.pyplot as plt
@@ -277,7 +350,6 @@ with aba2:
             pdf.ln(5)
 
             if not df_base.empty:
-                # Gera Gráfico para o PDF usando as variáveis calculadas acima
                 fig_s_pdf, ax = plt.subplots(figsize=(10, 4), dpi=150)
                 ax.plot(datas_g, pv_acumulado, color='#2980b9', linewidth=2, label='Planejado')
                 ax.plot([hoje], [ev_venda], marker='*', color='#27ae60', markersize=15, label='Executado (Hoje)')
@@ -286,9 +358,7 @@ with aba2:
                 plt.tight_layout()
                 plt.savefig('scurve_temp.png'); plt.close(fig_s_pdf)
                 
-                pdf.image('scurve_temp.png', x=15, w=260)
-                pdf.ln(5)
-                
+                pdf.image('scurve_temp.png', x=15, w=260); pdf.ln(5)
                 df_med = conn.query("SELECT * FROM medicoes WHERE obra_id = :oid", params={"oid": int(obra_ativa_id)}, ttl=0)
                 faturado = df_med['valor_medido'].sum() if not df_med.empty else 0.0
                 
@@ -304,7 +374,6 @@ with aba2:
             else:
                 st.error("Salve a Baseline primeiro para gerar o PDF!")
 
-    # 3. INTERFACE DA ABA
     col_curva, col_med = st.columns([2, 1])
     with col_curva:
         if not df_base.empty:
@@ -372,7 +441,8 @@ with aba3:
                 df_pdf_fin['valor'] = df_pdf_fin['valor'].apply(lambda x: f"R$ {float(x):,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
                 df_pdf_fin['data_vencimento'] = pd.to_datetime(df_pdf_fin['data_vencimento']).dt.strftime('%d/%m/%Y')
                 
-                gerar_tabela_pdf(pdf, df_pdf_fin, [25, 75, 35, 25, 25], ["Tipo", "Descricao", "Valor", "Vencimento", "Status"])
+                # 185mm total na vertical
+                gerar_tabela_pdf(pdf, df_pdf_fin, [25, 75, 35, 25, 25], ["Tipo", "Descricao", "Valor", "Vencimento", "Status"], base_x=12.5)
                 
                 pdf.output("relatorio_caixa.pdf")
                 with open("relatorio_caixa.pdf", "rb") as f: st.download_button("⬇️ Baixar PDF (Caixa)", data=f.read(), file_name="Financeiro.pdf", mime="application/pdf")
@@ -421,7 +491,8 @@ with aba4:
                 df_pdf_abc['% do Total'] = df_pdf_abc['% do Total'].apply(lambda x: f"{x:.1f}%")
                 df_pdf_abc['% Acumulado'] = df_pdf_abc['% Acumulado'].apply(lambda x: f"{x:.1f}%")
                 
-                gerar_tabela_pdf(pdf, df_pdf_abc, [120, 30, 40, 25, 25], ["Pacote de Contratacao", "Data Limite", "Custo Estimado", "% Total", "% Acumulado"], base_x=20)
+                # 240 largura total
+                gerar_tabela_pdf(pdf, df_pdf_abc, [120, 30, 40, 25, 25], ["Pacote de Contratacao", "Data Limite", "Custo Estimado", "% Total", "% Acumulado"], base_x=28.5)
                 
                 pdf.output("relatorio_abc.pdf")
                 with open("relatorio_abc.pdf", "rb") as f: st.download_button("⬇️ Baixar PDF (Curva ABC)", data=f.read(), file_name="CurvaABC.pdf", mime="application/pdf")
@@ -486,7 +557,7 @@ with aba6:
 
 # --- ABA 7: PLANEJAR KITS ---
 with aba7:
-    st.subheader("⚙️ Planejamento Avançado")
+    st.subheader("⚙️️ Planejamento Avançado")
     modo = st.radio("Método:", ["Kits Rápidos", "Tarefa Manual"])
     if modo == "Kits Rápidos":
         kits = {
