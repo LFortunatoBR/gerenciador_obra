@@ -5,6 +5,7 @@ from sqlalchemy import text
 import unicodedata
 from fpdf import FPDF
 import os
+from datetime import datetime
 
 # Função para evitar erros de acentos no PDF
 def remover_acentos(texto):
@@ -52,21 +53,37 @@ with aba1:
         custo_total = df_tarefas['custo_previsto'].sum()
         st.metric(label="Custo Total Previsto da Obra", value=f"R$ {custo_total:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
         
+        # Converte as datas logo no início para podermos usá-las nas validações
+        df_tarefas['data_inicio'] = pd.to_datetime(df_tarefas['data_inicio']).dt.date
+        df_tarefas['data_fim'] = pd.to_datetime(df_tarefas['data_fim']).dt.date
+        hoje = datetime.now().date()
+        
         # ==========================================
-        # PAINEL: ATUALIZAR PERCENTAGEM E EXCLUIR
-        # (expanded=True faz com que apareça sempre aberto)
+        # PAINEL: ATUALIZAR PERCENTAGEM E EXCLUIR (COM AVISOS DE DATA)
         # ==========================================
         with st.expander("📈 Gerir Avanço e Limpar Tarefas", expanded=True):
             st.write("Selecione um serviço para atualizar a percentagem real ou excluí-lo do cronograma:")
             col_sel, col_sld, col_btn_upd, col_btn_del = st.columns([2, 2, 1, 1])
             
             with col_sel:
-                # O if row['nome_servico'] else 'Tarefa sem nome' trata as linhas em branco que criou no teste
                 tarefas_dict = {row['id']: (row['nome_servico'] if pd.notna(row['nome_servico']) and row['nome_servico'] != "" else f"Tarefa sem nome (ID: {row['id']})") for _, row in df_tarefas.iterrows()}
                 id_selecionado = st.selectbox("Serviço", options=list(tarefas_dict.keys()), format_func=lambda x: tarefas_dict[x])
             
+            # Dados da tarefa selecionada
+            tarefa_selecionada = df_tarefas[df_tarefas['id'] == id_selecionado].iloc[0]
+            perc_atual = int(tarefa_selecionada['conclusao_percentual'])
+            data_inicio_tarefa = tarefa_selecionada['data_inicio']
+            data_fim_tarefa = tarefa_selecionada['data_fim']
+            
+            # Lógica de Avisos e Cores
+            if hoje < data_inicio_tarefa:
+                st.info(f"⏳ **Atenção:** Esta etapa ainda não começou. O início está previsto para {data_inicio_tarefa.strftime('%d/%m/%Y')}.")
+            elif hoje > data_fim_tarefa and perc_atual < 100:
+                st.error(f"🚨 **EM ATRASO:** O prazo terminou a {data_fim_tarefa.strftime('%d/%m/%Y')}. Atualize a percentagem ou reveja o cronograma.")
+            elif data_inicio_tarefa <= hoje <= data_fim_tarefa:
+                st.success("✅ Esta tarefa está dentro do período de execução.")
+
             with col_sld:
-                perc_atual = int(df_tarefas[df_tarefas['id'] == id_selecionado]['conclusao_percentual'].values[0])
                 novo_perc = st.slider("Conclusão (%)", 0, 100, perc_atual, key="slider_perc")
             
             with col_btn_upd:
@@ -82,7 +99,6 @@ with aba1:
             with col_btn_del:
                 st.write("") 
                 st.write("")
-                # Botão para excluir as tarefas indesejadas
                 if st.button("🗑️ Excluir", type="primary"):
                     with conn.session as s:
                         s.execute(text("DELETE FROM tarefas WHERE id = :id"), {"id": int(id_selecionado)})
@@ -90,13 +106,13 @@ with aba1:
                     st.error("Tarefa eliminada!")
                     st.rerun()
         # ==========================================
-
-        # Converte as datas para o gráfico funcionar
-        df_tarefas['data_inicio'] = pd.to_datetime(df_tarefas['data_inicio'])
-        df_tarefas['data_fim'] = pd.to_datetime(df_tarefas['data_fim'])
         
+        # Prepara dados para o gráfico
+        df_tarefas['data_inicio_plot'] = pd.to_datetime(df_tarefas['data_inicio'])
+        df_tarefas['data_fim_plot'] = pd.to_datetime(df_tarefas['data_fim'])
+
         fig = px.timeline(
-            df_tarefas, x_start="data_inicio", x_end="data_fim", y="nome_servico", color="fase",
+            df_tarefas, x_start="data_inicio_plot", x_end="data_fim_plot", y="nome_servico", color="fase",
             hover_data=["conclusao_percentual", "custo_previsto"], title="Evolução da Obra"
         )
         fig.update_yaxes(autorange="reversed")
@@ -107,8 +123,8 @@ with aba1:
         df_exibicao = df_tarefas[["nome_servico", "fase", "data_inicio", "data_fim", "custo_previsto", "conclusao_percentual"]].copy()
         df_exibicao.columns = ["Serviço", "Fase", "Início", "Término", "Custo Previsto", "Conclusão (%)"]
         
-        df_exibicao['Início'] = df_exibicao['Início'].dt.strftime('%d/%m/%Y')
-        df_exibicao['Término'] = df_exibicao['Término'].dt.strftime('%d/%m/%Y')
+        df_exibicao['Início'] = pd.to_datetime(df_exibicao['Início']).dt.strftime('%d/%m/%Y')
+        df_exibicao['Término'] = pd.to_datetime(df_exibicao['Término']).dt.strftime('%d/%m/%Y')
         
         nova_linha_total = pd.DataFrame([{"Serviço": "TOTAL DA OBRA", "Fase": "-", "Início": "-", "Término": "-", "Custo Previsto": custo_total, "Conclusão (%)": "-"}])
         df_exibicao = pd.concat([df_exibicao, nova_linha_total], ignore_index=True)
@@ -132,14 +148,8 @@ with aba1:
                 import matplotlib.dates as mdates
                 import numpy as np
 
-                # 1. GERAR A IMAGEM DO GRÁFICO DE GANTT (VIA MATPLOTLIB)
-                # Cria uma figura limpa e de alta resolução
                 fig_pdf, ax = plt.subplots(figsize=(10, 4), dpi=150)
-                
-                # Inverte a ordem para a primeira tarefa ficar no topo
                 df_grafico = df_tarefas.copy().sort_values(by='data_inicio', ascending=False)
-                
-                # Cores baseadas nas fases para ficar bonito no PDF
                 cores_fases = {"Projetos": "#90caf9", "Preparação": "#1976d2", "Administrativo": "#eeeeee",
                                "Infraestrutura": "#ffcc80", "Superestrutura": "#ff9800", 
                                "Instalações": "#a5d6a7", "Acabamento": "#4caf50"}
@@ -147,11 +157,10 @@ with aba1:
                 for idx, row in df_grafico.iterrows():
                     fase = str(row['fase'])
                     cor = cores_fases.get(fase, "#9e9e9e")
-                    inicio = mdates.date2num(row['data_inicio'])
-                    fim = mdates.date2num(row['data_fim'])
+                    inicio = mdates.date2num(row['data_inicio_plot'])
+                    fim = mdates.date2num(row['data_fim_plot'])
                     ax.barh(row['nome_servico'], fim - inicio, left=inicio, color=cor, edgecolor='black', alpha=0.8)
 
-                # Formatação do eixo X (Datas)
                 ax.xaxis_date()
                 ax.xaxis.set_major_formatter(mdates.DateFormatter('%d/%m/%Y'))
                 plt.xticks(rotation=45, ha='right', fontsize=8)
@@ -159,16 +168,13 @@ with aba1:
                 plt.title("Cronograma Fisico da Obra", fontsize=12, pad=10)
                 plt.tight_layout()
                 
-                # Salva o gráfico como imagem PNG temporária
                 caminho_imagem = "grafico_gantt_temp.png"
                 plt.savefig(caminho_imagem)
-                plt.close(fig_pdf) # Fecha a figura para economizar memória
+                plt.close(fig_pdf)
 
-                # 2. MONTAR A FOLHA A4 (COM A IMAGEM E A TABELA)
                 pdf = FPDF(orientation="P", unit="mm", format="A4")
                 pdf.add_page()
                 
-                # Título e Custo Total
                 pdf.set_font("Arial", "B", 16)
                 pdf.cell(190, 10, remover_acentos("Relatorio de Cronograma e Orcamento da Obra"), ln=True, align="C")
                 
@@ -177,11 +183,9 @@ with aba1:
                 pdf.cell(190, 10, remover_acentos(texto_custo), ln=True, align="C")
                 pdf.ln(5)
                 
-                # Insere o Gráfico PNG no PDF
                 pdf.image(caminho_imagem, x=10, w=190)
-                pdf.ln(5) # Espaço entre o gráfico e a tabela
+                pdf.ln(5) 
                 
-                # Cabeçalho da Tabela no PDF
                 pdf.set_font("Arial", "B", 9)
                 pdf.cell(70, 8, "Servico", 1)
                 pdf.cell(25, 8, "Inicio", 1)
@@ -189,7 +193,6 @@ with aba1:
                 pdf.cell(40, 8, "Custo Previsto", 1)
                 pdf.cell(30, 8, "Conclusao", 1, ln=True)
                 
-                # Linhas da Tabela
                 pdf.set_font("Arial", "", 8)
                 for index, row in df_exibicao.iterrows():
                     serv = remover_acentos(str(row['Serviço']))[:35]
@@ -206,7 +209,6 @@ with aba1:
                     pdf.cell(40, 8, custo, 1)
                     pdf.cell(30, 8, conc, 1, ln=True)
                 
-                # Salva o PDF na memória e exclui a imagem temporária
                 pdf.output("relatorio_obra.pdf")
                 with open("relatorio_obra.pdf", "rb") as f:
                     st.session_state['pdf_pronto'] = f.read()
@@ -216,7 +218,6 @@ with aba1:
                 except:
                     pass
 
-        # Mostra o botão de download
         if 'pdf_pronto' in st.session_state:
             st.success("Relatório com gráfico gerado com sucesso!")
             st.download_button(
@@ -238,6 +239,7 @@ with aba2:
     if busca:
         tabela_alvo = "sinapi_composicoes" if "Serviços" in tipo_busca else "sinapi_insumos"
         
+        # A correção para o preço 0.0: agora forçamos a busca pela coluna preco_mediano corretamente mapeada
         query = f"""
             SELECT codigo, descricao, unidade, preco_mediano 
             FROM {tabela_alvo} 
@@ -248,12 +250,11 @@ with aba2:
         
         if not df_sinapi.empty:
             for index, row in df_sinapi.iterrows():
-                # Cria um bloco visual para cada item encontrado
-                with st.expander(f"📦 {row['descricao'][:60]}... | R$ {row['preco_mediano']} / {row['unidade']}"):
+                
+                with st.expander(f"📦 {row['descricao'][:60]}... | R$ {float(row['preco_mediano']):.2f} / {row['unidade']}"):
                     st.write(f"**Descrição Completa:** {row['descricao']}")
-                    st.write(f"**Preço Unitário (RJ):** R$ {row['preco_mediano']} por {row['unidade']}")
+                    st.write(f"**Preço Unitário (RJ):** R$ {float(row['preco_mediano']):.2f} por {row['unidade']}")
                     
-                    # Mini-formulário para adicionar direto à obra
                     with st.form(f"add_direto_{index}"):
                         st.markdown("**Detalhes para o Cronograma:**")
                         col1, col2 = st.columns(2)
@@ -264,7 +265,6 @@ with aba2:
                         data_inicio = col3.date_input("Início do Serviço")
                         data_fim = col4.date_input("Fim do Serviço")
                         
-                        # O nome da tarefa no cronograma será o início da descrição para não ficar gigante
                         nome_abreviado = st.text_input("Nome Resumido para o Gráfico", value=row['descricao'][:50].title())
                         
                         btn_salvar = st.form_submit_button("➕ Adicionar Serviço à Obra")
