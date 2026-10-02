@@ -53,23 +53,24 @@ with aba1:
         st.metric(label="Custo Total Previsto da Obra", value=f"R$ {custo_total:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
         
         # ==========================================
-        # NOVO PAINEL: ATUALIZAR PERCENTAGEM
+        # PAINEL: ATUALIZAR PERCENTAGEM E EXCLUIR
+        # (expanded=True faz com que apareça sempre aberto)
         # ==========================================
-        with st.expander("📈 Atualizar Avanço das Tarefas"):
-            st.write("Selecione um serviço para atualizar a percentagem de conclusão real da obra:")
-            col_sel, col_sld, col_btn = st.columns([2, 2, 1])
+        with st.expander("📈 Gerir Avanço e Limpar Tarefas", expanded=True):
+            st.write("Selecione um serviço para atualizar a percentagem real ou excluí-lo do cronograma:")
+            col_sel, col_sld, col_btn_upd, col_btn_del = st.columns([2, 2, 1, 1])
             
             with col_sel:
-                # Cria um dicionário para ligar o ID da tarefa ao Nome visualmente
-                tarefas_dict = dict(zip(df_tarefas['id'], df_tarefas['nome_servico']))
+                # O if row['nome_servico'] else 'Tarefa sem nome' trata as linhas em branco que criou no teste
+                tarefas_dict = {row['id']: (row['nome_servico'] if pd.notna(row['nome_servico']) and row['nome_servico'] != "" else f"Tarefa sem nome (ID: {row['id']})") for _, row in df_tarefas.iterrows()}
                 id_selecionado = st.selectbox("Serviço", options=list(tarefas_dict.keys()), format_func=lambda x: tarefas_dict[x])
             
             with col_sld:
                 perc_atual = int(df_tarefas[df_tarefas['id'] == id_selecionado]['conclusao_percentual'].values[0])
                 novo_perc = st.slider("Conclusão (%)", 0, 100, perc_atual, key="slider_perc")
             
-            with col_btn:
-                st.write("") # Espaçamento para alinhar com o formulário
+            with col_btn_upd:
+                st.write("") 
                 st.write("")
                 if st.button("Gravar Alteração"):
                     with conn.session as s:
@@ -77,9 +78,20 @@ with aba1:
                         s.commit()
                     st.success("Atualizado!")
                     st.rerun()
+
+            with col_btn_del:
+                st.write("") 
+                st.write("")
+                # Botão para excluir as tarefas indesejadas
+                if st.button("🗑️ Excluir", type="primary"):
+                    with conn.session as s:
+                        s.execute(text("DELETE FROM tarefas WHERE id = :id"), {"id": int(id_selecionado)})
+                        s.commit()
+                    st.error("Tarefa eliminada!")
+                    st.rerun()
         # ==========================================
 
-        # Converte as datas para o gráfico funcionar (mantenha o seu código restante abaixo disto)
+        # Converte as datas para o gráfico funcionar
         df_tarefas['data_inicio'] = pd.to_datetime(df_tarefas['data_inicio'])
         df_tarefas['data_fim'] = pd.to_datetime(df_tarefas['data_fim'])
         
