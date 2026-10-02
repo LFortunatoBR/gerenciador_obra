@@ -12,6 +12,52 @@ import pytz
 def remover_acentos(texto):
     return ''.join(c for c in unicodedata.normalize('NFD', str(texto)) if unicodedata.category(c) != 'Mn')
 
+# --- LISTA OFICIAL DE MACRO-ETAPAS (PADRÃO SINAPI/EAP) ---
+FASES_DA_OBRA = [
+    "1. Serviços Preliminares e Projetos",
+    "2. Canteiro de Obras e Locação",
+    "3. Movimento de Terra (Terraplenagem)",
+    "4. Fundações e Contenções",
+    "5. Superestrutura (Concreto/Aço/Madeira)",
+    "6. Alvenaria e Paredes de Vedação",
+    "7. Coberturas e Impermeabilizações",
+    "8. Esquadrias, Portas e Janelas",
+    "9. Instalações Hidrossanitárias e Gás",
+    "10. Instalações Elétricas, Lógicas e SPDA",
+    "11. Instalações de Combate a Incêndio",
+    "12. Instalações Especiais e Climatização",
+    "13. Revestimentos Internos e Externos",
+    "14. Pisos e Rodapés",
+    "15. Forros e Pinturas",
+    "16. Louças, Metais e Acessórios",
+    "17. Paisagismo e Urbanização",
+    "18. Limpeza Final e Desmobilização",
+    "19. Taxas, Licenças e Administrativo"
+]
+
+# --- PALETA DE CORES PARA O RELATÓRIO PDF ---
+CORES_FASES_PDF = {
+    "1. Serviços Preliminares e Projetos": "#cfd8dc",
+    "2. Canteiro de Obras e Locação": "#b0bec5",
+    "3. Movimento de Terra (Terraplenagem)": "#8d6e63",
+    "4. Fundações e Contenções": "#795548",
+    "5. Superestrutura (Concreto/Aço/Madeira)": "#ff9800",
+    "6. Alvenaria e Paredes de Vedação": "#ffcc80",
+    "7. Coberturas e Impermeabilizações": "#00bcd4",
+    "8. Esquadrias, Portas e Janelas": "#4dd0e1",
+    "9. Instalações Hidrossanitárias e Gás": "#4fc3f7",
+    "10. Instalações Elétricas, Lógicas e SPDA": "#fff176",
+    "11. Instalações de Combate a Incêndio": "#e57373",
+    "12. Instalações Especiais e Climatização": "#ba68c8",
+    "13. Revestimentos Internos e Externos": "#a5d6a7",
+    "14. Pisos e Rodapés": "#81c784",
+    "15. Forros e Pinturas": "#4caf50",
+    "16. Louças, Metais e Acessórios": "#f48fb1",
+    "17. Paisagismo e Urbanização": "#66bb6a",
+    "18. Limpeza Final e Desmobilização": "#e0e0e0",
+    "19. Taxas, Licenças e Administrativo": "#9e9e9e"
+}
+
 # --- FUNÇÕES DE ENGENHARIA (CALENDÁRIO DIAS ÚTEIS) ---
 def add_bus_days(start_date, days):
     if days == 0: return start_date
@@ -20,7 +66,7 @@ def add_bus_days(start_date, days):
     step = 1 if days > 0 else -1
     while added < abs(days):
         current += timedelta(days=step)
-        if current.weekday() < 5: # 0-4 são Seg-Sex
+        if current.weekday() < 5: 
             added += 1
     return current
 
@@ -40,7 +86,7 @@ def rodar_motor_cpm(conn, obra_id):
         
         mudou = True
         loop = 0
-        while mudou and loop < 50: # Impede loop infinito
+        while mudou and loop < 50: 
             mudou = False
             loop += 1
             for t_id, t in t_dict.items():
@@ -51,7 +97,6 @@ def rodar_motor_cpm(conn, obra_id):
                         tipo = t['tipo_dep'] or 'TI'
                         
                         nova_ini = t['data_inicio']
-                        # TI = Término-Início / II = Início-Início
                         if tipo == 'TI': nova_ini = add_bus_days(pred['data_fim'], lag + 1)
                         elif tipo == 'II': nova_ini = add_bus_days(pred['data_inicio'], lag)
                             
@@ -61,7 +106,6 @@ def rodar_motor_cpm(conn, obra_id):
                             t['data_inicio'], t['data_fim'] = nova_ini, nova_fim
                             mudou = True
                             
-        # Roll-up EAP (Macro-tarefas assumem dados das filhas)
         parents = set(t['parent_id'] for t in t_dict.values() if t['parent_id'])
         for p_id in parents:
             children = [t for t in t_dict.values() if t['parent_id'] == p_id]
@@ -152,7 +196,6 @@ aba1, aba4, aba2, aba3 = st.tabs(["📊 Gantt & EAP", "📈 Curva S (Baseline)",
 with aba1:
     col_met, col_btn = st.columns([3, 1])
     with col_met:
-        # Soma apenas as raízes para evitar dupla contagem financeira
         df_top_level = df_tarefas[df_tarefas['parent_id'].isna()]
         custo_total = df_top_level['custo_previsto'].sum() if not df_top_level.empty else 0
         st.metric("Custo Total Real (Projeto)", f"R$ {custo_total:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
@@ -178,9 +221,10 @@ with aba1:
         st.subheader("📋 Estrutura Analítica do Projeto (EAP)")
         
         df_exib_rows = []
-        fases = df_tarefas['fase'].unique()
+        # Ordena as fases extraídas para que apareçam na ordem correta da lista FASES_DA_OBRA
+        fases_presentes = [f for f in FASES_DA_OBRA if f in df_tarefas['fase'].unique()] 
         
-        for fase in fases:
+        for fase in fases_presentes:
             df_fase = df_tarefas[df_tarefas['fase'] == fase]
             
             for _, row in df_fase.iterrows():
@@ -197,7 +241,7 @@ with aba1:
             total_fase = df_fase[df_fase['parent_id'].isna()]['custo_previsto'].sum()
             df_exib_rows.append({
                 "id": None,
-                "Serviço": f"➤ SUBTOTAL DA FASE: {fase.upper()}",
+                "Serviço": f"➤ SUBTOTAL: {fase.upper()}",
                 "Início": "", "Fim": "", "conclusao_percentual": None, "custo_previsto": total_fase
             })
             
@@ -269,7 +313,7 @@ with aba2:
                     with st.form(f"add_direto_{index}"):
                         col1, col2 = st.columns(2)
                         qtd = col1.number_input(f"Quantidade", min_value=0.1, value=1.0)
-                        fase_esc = col2.selectbox("Fase", ["Projetos", "Infraestrutura", "Superestrutura", "Acabamento"])
+                        fase_esc = col2.selectbox("Fase", FASES_DA_OBRA)
                         c3, c4 = st.columns(2)
                         d_ini, d_fim = c3.date_input("Início"), c4.date_input("Término")
                         nome_abrev = st.text_input("Nome", value=row['descricao'][:50].title())
@@ -296,9 +340,21 @@ with aba3:
     if modo == "Kits Rápido de Engenharia":
         st.write("Gera cadeias automáticas de serviço (CPM) descontando fins de semana.")
         kits = {
-            "Concretagem (Laje/Pilar)": [{"nome": "Fôrmas", "fase": "Superestrutura"}, {"nome": "Armação", "fase": "Superestrutura"}, {"nome": "Concretagem", "fase": "Superestrutura"}],
-            "Alvenaria e Acabamento": [{"nome": "Alvenaria", "fase": "Superestrutura"}, {"nome": "Chapisco", "fase": "Acabamento"}, {"nome": "Reboco", "fase": "Acabamento"}],
-            "Porcelanato": [{"nome": "Contrapiso", "fase": "Acabamento"}, {"nome": "Assentamento", "fase": "Acabamento"}, {"nome": "Rejunte", "fase": "Acabamento"}]
+            "Concretagem (Laje/Pilar)": [
+                {"nome": "Fôrmas", "fase": "5. Superestrutura (Concreto/Aço/Madeira)"}, 
+                {"nome": "Armação", "fase": "5. Superestrutura (Concreto/Aço/Madeira)"}, 
+                {"nome": "Concretagem", "fase": "5. Superestrutura (Concreto/Aço/Madeira)"}
+            ],
+            "Alvenaria e Acabamento": [
+                {"nome": "Alvenaria", "fase": "6. Alvenaria e Paredes de Vedação"}, 
+                {"nome": "Chapisco", "fase": "13. Revestimentos Internos e Externos"}, 
+                {"nome": "Reboco", "fase": "13. Revestimentos Internos e Externos"}
+            ],
+            "Porcelanato": [
+                {"nome": "Contrapiso", "fase": "14. Pisos e Rodapés"}, 
+                {"nome": "Assentamento", "fase": "14. Pisos e Rodapés"}, 
+                {"nome": "Rejunte", "fase": "14. Pisos e Rodapés"}
+            ]
         }
         kit_sel = st.selectbox("Sistema Construtivo:", list(kits.keys()))
         
@@ -337,7 +393,7 @@ with aba3:
         st.write("Adicione tarefas isoladas com regras complexas de dependência e Lags.")
         with st.form("form_manual_unico"):
             n = st.text_input("Nome da Tarefa/Etapa")
-            f = st.selectbox("Fase", ["Projetos", "Infraestrutura", "Superestrutura", "Instalações", "Acabamento"])
+            f = st.selectbox("Fase", FASES_DA_OBRA)
             
             c_pai, c_cst = st.columns(2)
             pai = c_pai.selectbox("Pertence à qual Macro-etapa?", options=list(opcoes_parent.keys()), format_func=lambda x: opcoes_parent[x])
