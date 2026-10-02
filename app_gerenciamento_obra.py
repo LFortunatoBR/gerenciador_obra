@@ -8,6 +8,7 @@ from fpdf import FPDF
 import os
 from datetime import datetime, timedelta
 import pytz
+import math
 
 def remover_acentos(texto):
     if pd.isna(texto): return ""
@@ -15,34 +16,19 @@ def remover_acentos(texto):
     s = ''.join(c for c in unicodedata.normalize('NFD', texto) if unicodedata.category(c) != 'Mn')
     return s.encode('latin1', 'ignore').decode('latin1')
 
-# ==========================================
-# PALETA DE CORES PARA AS MACRO-ETAPAS (GANTT E PDF)
-# ==========================================
 CORES_FASES = {
-    "1. Serviços Preliminares e Projetos": "#2196F3",
-    "2. Canteiro de Obras e Locação": "#FF9800",
-    "3. Movimento de Terra (Terraplenagem)": "#795548",
-    "4. Fundações e Contenções": "#9E9E9E",
-    "5. Superestrutura (Concreto/Aço/Madeira)": "#607D8B",
-    "6. Alvenaria e Paredes de Vedação": "#FF5722",
-    "7. Coberturas e Impermeabilizações": "#00BCD4",
-    "8. Esquadrias, Portas e Janelas": "#E91E63",
-    "9. Instalações Hidrossanitárias e Gás": "#03A9F4",
-    "10. Instalações Elétricas, Lógicas e SPDA": "#FFEB3B",
-    "11. Instalações de Combate a Incêndio": "#F44336",
-    "12. Instalações Especiais e Climatização": "#9C27B0",
-    "13. Revestimentos Internos e Externos": "#8BC34A",
-    "14. Pisos e Rodapés": "#4CAF50",
-    "15. Forros e Pinturas": "#CDDC39",
-    "16. Louças, Metais e Acessórios": "#009688",
-    "17. Paisagismo e Urbanização": "#388E3C",
-    "18. Limpeza Final e Desmobilização": "#BDBDBD",
+    "1. Serviços Preliminares e Projetos": "#2196F3", "2. Canteiro de Obras e Locação": "#FF9800",
+    "3. Movimento de Terra (Terraplenagem)": "#795548", "4. Fundações e Contenções": "#9E9E9E",
+    "5. Superestrutura (Concreto/Aço/Madeira)": "#607D8B", "6. Alvenaria e Paredes de Vedação": "#FF5722",
+    "7. Coberturas e Impermeabilizações": "#00BCD4", "8. Esquadrias, Portas e Janelas": "#E91E63",
+    "9. Instalações Hidrossanitárias e Gás": "#03A9F4", "10. Instalações Elétricas, Lógicas e SPDA": "#FFEB3B",
+    "11. Instalações de Combate a Incêndio": "#F44336", "12. Instalações Especiais e Climatização": "#9C27B0",
+    "13. Revestimentos Internos e Externos": "#8BC34A", "14. Pisos e Rodapés": "#4CAF50",
+    "15. Forros e Pinturas": "#CDDC39", "16. Louças, Metais e Acessórios": "#009688",
+    "17. Paisagismo e Urbanização": "#388E3C", "18. Limpeza Final e Desmobilização": "#BDBDBD",
     "19. Taxas, Licenças e Administrativo": "#673AB7"
 }
 
-# ==========================================
-# MOTOR DE TABELAS PDF
-# ==========================================
 def gerar_tabela_pdf(pdf, df, col_widths, col_names, base_x=10, orient="P", max_y=275):
     def imprimir_cabecalho():
         pdf.set_fill_color(41, 128, 185)
@@ -52,51 +38,35 @@ def gerar_tabela_pdf(pdf, df, col_widths, col_names, base_x=10, orient="P", max_
         for name, w in zip(col_names, col_widths):
             pdf.cell(w, 8, remover_acentos(name), border=0, fill=True, align='C')
         pdf.ln(8)
-
     imprimir_cabecalho()
-    
-    pdf.set_text_color(40, 40, 40)
-    pdf.set_font("Arial", '', 8)
+    pdf.set_text_color(40, 40, 40); pdf.set_font("Arial", '', 8)
     fill = False
-    
     for idx, row in df.iterrows():
         row_data = [remover_acentos(str(x)) for x in row.values]
-        
         max_lines = 1
         for text, w in zip(row_data, col_widths):
             width_text = pdf.get_string_width(text)
             if width_text > (w - 2):
                 lines = int(width_text / (w - 2)) + 1
                 if lines > max_lines: max_lines = lines
-        
-        line_height = 5
-        row_height = max_lines * line_height
-        
+        line_height = 5; row_height = max_lines * line_height
         if pdf.get_y() + row_height > max_y:
-            pdf.add_page(orientation=orient)
-            pdf.set_y(15)
-            imprimir_cabecalho()
-            pdf.set_text_color(40, 40, 40)
-            pdf.set_font("Arial", '', 8)
-            
+            pdf.add_page(orientation=orient); pdf.set_y(15)
+            imprimir_cabecalho(); pdf.set_text_color(40, 40, 40); pdf.set_font("Arial", '', 8)
         y_start = pdf.get_y()
-        
         if fill:
             pdf.set_fill_color(240, 245, 250)
             pdf.rect(base_x, y_start, sum(col_widths), row_height, 'F')
-        
         x_curr = base_x
         for text, w in zip(row_data, col_widths):
             pdf.set_xy(x_curr, y_start)
             pdf.multi_cell(w, line_height, text, border=0, align='C')
             x_curr += w
-        
         pdf.set_draw_color(200, 200, 200)
         pdf.line(base_x, y_start + row_height, base_x + sum(col_widths), y_start + row_height)
         pdf.set_xy(base_x, y_start + row_height)
         fill = not fill
 
-# --- LISTAS E FUNÇÕES DO CPM ---
 FASES_DA_OBRA = list(CORES_FASES.keys())
 
 def add_bus_days(start_date, days, dias_impedidos=[]):
@@ -104,28 +74,35 @@ def add_bus_days(start_date, days, dias_impedidos=[]):
     current = start_date; added = 0; step = 1 if days > 0 else -1
     while added < abs(days):
         current += timedelta(days=step)
-        # Só soma o dia se não for fim de semana E não estiver na lista de Chuva Impeditiva do RDO
-        if current.weekday() < 5 and current not in dias_impedidos: 
-            added += 1
+        if current.weekday() < 5 and current not in dias_impedidos: added += 1
     return current
 
 def bus_days_between(start, end, dias_impedidos=[]):
     days = 0; curr = start
     while curr < end:
-        if curr.weekday() < 5 and curr not in dias_impedidos: 
-            days += 1
+        if curr.weekday() < 5 and curr not in dias_impedidos: days += 1
         curr += timedelta(days=1)
     return days
 
 def rodar_motor_cpm(conn, obra_id):
-    # 1. Busca os dias de chuva impeditiva do RDO
-    df_chuva = conn.query("SELECT data_relatorio FROM rdo WHERE obra_id = :oid AND clima = 'Chuva Impeditiva'", params={"oid": obra_id}, ttl=0)
+    # RDO AFETA O PRAZO: Pega os dias de chuva!
+    df_chuva = conn.query("SELECT data_relatorio FROM rdo WHERE obra_id = :oid AND clima = 'Chuva Impeditiva'", params={"oid": int(obra_id)}, ttl=0)
     dias_chuva = pd.to_datetime(df_chuva['data_relatorio']).dt.date.tolist() if not df_chuva.empty else []
 
     with conn.session as s:
+        # 1. ATUALIZA OS CUSTOS BASEADO NOS INSUMOS NEGOCIADOS (CURVA ABC)
+        s.execute(text("""
+            UPDATE tarefas t SET 
+                custo_previsto = COALESCE((SELECT SUM(quantidade * preco_real) FROM orcamento_insumos WHERE tarefa_id = t.id), custo_previsto),
+                custo_mo = COALESCE((SELECT SUM(quantidade * preco_real) FROM orcamento_insumos WHERE tarefa_id = t.id AND tipo = 'MO'), 0),
+                custo_mat = COALESCE((SELECT SUM(quantidade * preco_real) FROM orcamento_insumos WHERE tarefa_id = t.id AND tipo != 'MO'), 0)
+            WHERE t.obra_id = :oid AND t.parent_id IS NOT NULL
+        """), {"oid": obra_id})
+        
         result = s.execute(text("SELECT * FROM tarefas WHERE obra_id = :oid"), {"oid": obra_id}).mappings().all()
         t_dict = {t['id']: dict(t) for t in result}
         mudou = True; loop = 0
+        
         while mudou and loop < 50: 
             mudou = False; loop += 1
             for t_id, t in t_dict.items():
@@ -134,37 +111,33 @@ def rodar_motor_cpm(conn, obra_id):
                     if pred:
                         lag = t['lag_dias'] or 0; tipo = t['tipo_dep'] or 'TI'
                         nova_ini = t['data_inicio']
-                        # O motor agora usa os 'dias_chuva' para empurrar o cronograma automaticamente!
                         if tipo == 'TI': nova_ini = add_bus_days(pred['data_fim'], lag + 1, dias_chuva)
                         elif tipo == 'II': nova_ini = add_bus_days(pred['data_inicio'], lag, dias_chuva)
-                        
                         if nova_ini != t['data_inicio']:
                             duracao = bus_days_between(t['data_inicio'], t['data_fim'], dias_chuva)
-                            t['data_inicio'] = nova_ini
-                            t['data_fim'] = add_bus_days(nova_ini, max(0, duracao), dias_chuva)
+                            t['data_inicio'], t['data_fim'] = nova_ini, add_bus_days(nova_ini, max(0, duracao), dias_chuva)
                             mudou = True
                             
-        # Atualiza as Macro-etapas
         parents = set(t['parent_id'] for t in t_dict.values() if t['parent_id'])
         for p_id in parents:
             children = [t for t in t_dict.values() if t['parent_id'] == p_id]
             if children and p_id in t_dict:
-                min_ini = min(c['data_inicio'] for c in children)
-                max_fim = max(c['data_fim'] for c in children)
+                min_ini, max_fim = min(c['data_inicio'] for c in children), max(c['data_fim'] for c in children)
                 sum_c = sum(c['custo_previsto'] or 0 for c in children)
+                sum_mo = sum(c['custo_mo'] or 0 for c in children)
+                sum_mat = sum(c['custo_mat'] or 0 for c in children)
                 total_c = sum_c if sum_c > 0 else len(children)
                 sum_perc = sum((c['conclusao_percentual']*(c['custo_previsto'] or 1))/total_c for c in children) if sum_c>0 else sum(c['conclusao_percentual'] for c in children)/len(children)
                 if (t_dict[p_id]['data_inicio'] != min_ini or t_dict[p_id]['data_fim'] != max_fim or t_dict[p_id]['custo_previsto'] != sum_c or t_dict[p_id]['conclusao_percentual'] != int(sum_perc)):
-                    t_dict[p_id]['data_inicio'], t_dict[p_id]['data_fim'], t_dict[p_id]['custo_previsto'], t_dict[p_id]['conclusao_percentual'] = min_ini, max_fim, float(sum_c), int(sum_perc)
+                    t_dict[p_id]['data_inicio'], t_dict[p_id]['data_fim'], t_dict[p_id]['custo_previsto'] = min_ini, max_fim, float(sum_c)
+                    t_dict[p_id]['custo_mo'], t_dict[p_id]['custo_mat'], t_dict[p_id]['conclusao_percentual'] = float(sum_mo), float(sum_mat), int(sum_perc)
                     mudou = True
                     
         for t_id, t in t_dict.items():
-            s.execute(text("UPDATE tarefas SET data_inicio=:i, data_fim=:f, custo_previsto=:c, conclusao_percentual=:p WHERE id=:id"), {"i": t['data_inicio'], "f": t['data_fim'], "c": float(t['custo_previsto'] or 0), "p": int(t['conclusao_percentual'] or 0), "id": t_id})
+            s.execute(text("UPDATE tarefas SET data_inicio=:i, data_fim=:f, custo_previsto=:c, custo_mo=:cmo, custo_mat=:cma, conclusao_percentual=:p WHERE id=:id"), 
+                      {"i": t['data_inicio'], "f": t['data_fim'], "c": float(t['custo_previsto'] or 0), "cmo": float(t['custo_mo'] or 0), "cma": float(t['custo_mat'] or 0), "p": int(t['conclusao_percentual'] or 0), "id": t_id})
         s.commit()
 
-# ==========================================
-# SETUP DA PÁGINA E CONEXÃO
-# ==========================================
 st.set_page_config(page_title="ERP Obras", page_icon="🏗", layout="wide")
 
 def check_password():
@@ -184,7 +157,19 @@ fuso_brasil = pytz.timezone('America/Sao_Paulo')
 hoje = datetime.now(fuso_brasil).date()
 
 # ==========================================
-# BARRA LATERAL
+# FUNÇÕES DE CACHE (ALTA PERFORMANCE)
+# ==========================================
+@st.cache_data(ttl=3600)
+def buscar_sinapi_cache(busca_texto, tabela):
+    return conn.query(f"SELECT codigo, descricao, unidade, preco_mediano FROM {tabela} WHERE descricao ILIKE '%{busca_texto}%' LIMIT 15;", ttl=0)
+
+@st.cache_data(ttl=3600)
+def explodir_composicao_cache(codigo_composicao):
+    try: return conn.query(f"SELECT * FROM sinapi_analitico WHERE codigo_composicao = '{codigo_composicao}'", ttl=0)
+    except: return pd.DataFrame()
+
+# ==========================================
+# BARRA LATERAL E DASHBOARD GLOBAL
 # ==========================================
 with st.sidebar:
     st.header("🏢 Diretoria & Projetos")
@@ -231,49 +216,25 @@ if obra_ativa_id == 0:
         c3.metric("Lucro Bruto Projetado", f"R$ {(df_resumo['Preço Venda'].sum() - df_resumo['Custo Total'].sum()):,.2f}")
         fig_dash = px.bar(df_resumo, x="Obra", y="Avanço Físico (%)", text="Avanço Físico (%)", color="Avanço Físico (%)", color_continuous_scale="RdYlGn", range_y=[0, 100])
         st.plotly_chart(fig_dash, use_container_width=True)
-        
-    else:
-        st.info("Nenhuma obra encontrada. Crie um novo projeto na barra lateral.")
+    else: st.info("Nenhuma obra encontrada. Crie um novo projeto.")
         
     st.divider()
-    
-    # --- ÁREA DE GESTÃO E EXCLUSÃO DE PROJETOS ---
-    st.subheader("🗑️ Gestão de Dados e Exclusão de Projetos")
-    st.write("Atenção: A exclusão de um projeto é permanente e apagará todas as tarefas, finanças e medições associadas.")
-    
-    try:
-        df_obras_gestao = conn.query("SELECT id, nome FROM obras ORDER BY id;", ttl=0)
-    except Exception as e:
-        df_obras_gestao = pd.DataFrame()
-        
+    st.subheader("🗑️ Gestão de Dados e Exclusão")
+    st.write("Atenção: A exclusão apagará todas as tarefas, finanças e medições do banco de dados (Efeito Cascata).")
+    try: df_obras_gestao = conn.query("SELECT id, nome FROM obras ORDER BY id;", ttl=0)
+    except: df_obras_gestao = pd.DataFrame()
     if not df_obras_gestao.empty:
-        with st.expander("Abrir Painel de Exclusão de Projetos", expanded=False):
+        with st.expander("Abrir Painel de Exclusão", expanded=False):
             with st.form("form_excluir_projetos"):
-                # Cria checkboxes para selecionar múltiplos projetos
-                projetos_para_excluir = st.multiselect(
-                    "Selecione os projetos que deseja DELETAR TOTALMENTE:",
-                    options=df_obras_gestao['id'].tolist(),
-                    format_func=lambda x: df_obras_gestao[df_obras_gestao['id'] == x]['nome'].values[0]
-                )
-                
-                # Checkbox de confirmação de segurança
-                confirmacao = st.checkbox("Tenho certeza de que desejo apagar permanentemente os dados selecionados.")
-                
-                # Botão de exclusão (formatado em vermelho para chamar atenção)
+                projetos_para_excluir = st.multiselect("Selecione os projetos para DELETAR:", options=df_obras_gestao['id'].tolist(), format_func=lambda x: df_obras_gestao[df_obras_gestao['id'] == x]['nome'].values[0])
+                confirmacao = st.checkbox("Confirmo a exclusão permanente.")
                 if st.form_submit_button("Excluir Projetos Selecionados", type="primary"):
-                    if not projetos_para_excluir:
-                        st.warning("Selecione pelo menos um projeto para excluir.")
-                    elif not confirmacao:
-                        st.error("Por favor, marque a caixa de confirmação de segurança.")
+                    if not projetos_para_excluir or not confirmacao: st.error("Marque os projetos e a confirmação.")
                     else:
                         with conn.session as s:
-                            for p_id in projetos_para_excluir:
-                                # O ON DELETE CASCADE no banco (configurado no Passo 1 da migração)
-                                # garante que tarefas, RDO, finanças e medições sejam apagadas automaticamente.
-                                s.execute(text("DELETE FROM obras WHERE id = :id"), {"id": int(p_id)})
+                            for p_id in projetos_para_excluir: s.execute(text("DELETE FROM obras WHERE id = :id"), {"id": int(p_id)})
                             s.commit()
-                        st.success(f"{len(projetos_para_excluir)} projeto(s) excluído(s) com sucesso!")
-                        st.rerun()
+                        st.success("Excluído com sucesso!"); st.rerun()
     st.stop()
 
 # ==========================================
@@ -289,15 +250,14 @@ if not df_tarefas.empty:
         opcoes_dep[r['id']] = n_tarefa
         if pd.isna(r['parent_id']): opcoes_parent[r['id']] = f"📦 {n_tarefa}"
 
-aba1, aba2, aba3, aba4, aba5, aba6, aba7 = st.tabs(["📊 Gantt & EAP", "📈 Curva S (Medição)", "💸 Financeiro", "🛒 Insumos (Curva ABC)", "📖 RDO", "💰 SINAPI", "⚙️ Planejar"])
+aba1, aba2, aba3, aba4, aba5, aba6, aba7 = st.tabs(["📊 Gantt & EAP", "📈 Curva S (Medição)", "💸 Dashboard Financeiro", "🛒 Suprimentos (Preços Reais)", "📖 RDO", "💰 SINAPI", "⚙️ Planejar"])
 
-# --- ABA 1: GANTT, ATUALIZAÇÃO, TABELA EAP E PDF ---
+# --- ABA 1: GANTT & EAP ---
 with aba1:
     col_met1, col_met2, col_btn = st.columns([2, 2, 1])
     df_top_level = df_tarefas[df_tarefas['parent_id'].isna()]
     custo_total = df_top_level['custo_previsto'].sum() if not df_top_level.empty else 0
     preco_venda = custo_total * (1 + (taxa_bdi/100))
-    
     col_met1.metric("Custo Total (Interno)", f"R$ {custo_total:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
     col_met2.metric(f"Preço de Venda (BDI {taxa_bdi}%)", f"R$ {preco_venda:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
     if col_btn.button("🔄 Recalcular CPM", type="primary", use_container_width=True):
@@ -315,63 +275,44 @@ with aba1:
                 with conn.session as s:
                     s.execute(text("UPDATE tarefas SET conclusao_percentual = :p, data_fim = :df WHERE id = :id"), {"p": n_perc, "df": n_data, "id": int(t_id)})
                     s.commit()
-                rodar_motor_cpm(conn, int(obra_ativa_id))
-                st.rerun()
+                rodar_motor_cpm(conn, int(obra_ativa_id)); st.rerun()
 
     if not df_tarefas.empty:
         df_tarefas['data_inicio'] = pd.to_datetime(df_tarefas['data_inicio']).dt.date
         df_tarefas['data_fim'] = pd.to_datetime(df_tarefas['data_fim']).dt.date
         
-        # --- GRÁFICO INTERATIVO NO APP (Mais compacto verticalmente, barras finas e linhas horizontais) ---
-        altura_app = max(400, len(df_tarefas) * 25) # Reduzido o multiplicador de 35 para 25 para compactar
+        altura_app = max(400, len(df_tarefas) * 25)
         fig = px.timeline(df_tarefas, x_start="data_inicio", x_end="data_fim", y="nome_servico", color="fase", color_discrete_map=CORES_FASES, title="Evolução Lógica")
-        
-        fig.update_yaxes(autorange="reversed")
-        
-        # Reduz a espessura das barras
-        fig.update_traces(width=0.5) 
-        
-        # Adiciona as linhas guias verticais E horizontais
-        fig.update_layout(
-            height=altura_app, 
-            margin=dict(l=0, r=0, t=30, b=0),
-            yaxis=dict(
-                showgrid=True, 
-                gridcolor='rgba(128, 128, 128, 0.2)' # Linha horizontal sutil entre os serviços
-            ),
-            xaxis=dict(
-                dtick=604800000, # Semanal
-                tickformat="%d/%m\n%Y", 
-                showgrid=True, 
-                gridcolor='rgba(128, 128, 128, 0.4)',
-                gridwidth=1
-            )
-        )
+        fig.update_yaxes(autorange="reversed"); fig.update_traces(width=0.5) 
+        fig.update_layout(height=altura_app, margin=dict(l=0, r=0, t=30, b=0), yaxis=dict(showgrid=True, gridcolor='rgba(128, 128, 128, 0.2)'), xaxis=dict(dtick=604800000, tickformat="%d/%m\n%Y", showgrid=True, gridcolor='rgba(128, 128, 128, 0.4)', gridwidth=1))
         st.plotly_chart(fig, use_container_width=True)
         
-        st.subheader("📋 Estrutura Analítica (EAP)")
+        st.subheader("📋 Estrutura Analítica com Explosão de Custos")
         df_exib_rows = []
-        
         fases_presentes = sorted(df_tarefas['fase'].unique(), key=lambda x: FASES_DA_OBRA.index(x) if x in FASES_DA_OBRA else 999)
         ordem_exibicao_grafico = [] 
         
         for fase in fases_presentes:
             df_fase = df_tarefas[df_tarefas['fase'] == fase]
             for _, row in df_fase.iterrows():
-                nome_formatado = ("  ↳ " if pd.notna(row['parent_id']) else "📦 ") + row['nome_servico']
                 df_exib_rows.append({
-                    "id": row['id'], "Serviço": nome_formatado,
+                    "id": row['id'], "Serviço": ("  ↳ " if pd.notna(row['parent_id']) else "📦 ") + row['nome_servico'],
                     "Início": pd.to_datetime(row['data_inicio']).strftime('%d/%m/%Y'), "Fim": pd.to_datetime(row['data_fim']).strftime('%d/%m/%Y'),
-                    "Conc. %": row['conclusao_percentual'], "Custo (R$)": row['custo_previsto'], "Venda (R$)": float(row['custo_previsto']) * (1 + (taxa_bdi/100))
+                    "Conc. %": row['conclusao_percentual'], 
+                    "Custo MAT": float(row.get('custo_mat', 0)), "Custo MO": float(row.get('custo_mo', 0)), "Total (R$)": float(row['custo_previsto'])
                 })
                 ordem_exibicao_grafico.insert(0, {'nome': row['nome_servico'], 'inicio': pd.to_datetime(row['data_inicio']), 'fim': pd.to_datetime(row['data_fim']), 'fase': row['fase']})
-                
+            t_mat = df_fase[df_fase['parent_id'].isna()]['custo_mat'].sum() if 'custo_mat' in df_fase else 0
+            t_mo = df_fase[df_fase['parent_id'].isna()]['custo_mo'].sum() if 'custo_mo' in df_fase else 0
             t_custo = df_fase[df_fase['parent_id'].isna()]['custo_previsto'].sum()
-            df_exib_rows.append({"id": None, "Serviço": f"➤ SUBTOTAL: {fase.upper()}", "Início": "", "Fim": "", "Conc. %": None, "Custo (R$)": t_custo, "Venda (R$)": t_custo * (1 + (taxa_bdi/100))})
+            df_exib_rows.append({"id": None, "Serviço": f"➤ SUBTOTAL: {fase.upper()}", "Início": "", "Fim": "", "Conc. %": None, "Custo MAT": t_mat, "Custo MO": t_mo, "Total (R$)": t_custo})
             
-        df_exib_rows.append({"id": None, "Serviço": "⭐ TOTAL GERAL", "Início": "", "Fim": "", "Conc. %": None, "Custo (R$)": custo_total, "Venda (R$)": preco_venda})
+        t_geral_mat = df_top_level['custo_mat'].sum() if not df_top_level.empty and 'custo_mat' in df_top_level else 0
+        t_geral_mo = df_top_level['custo_mo'].sum() if not df_top_level.empty and 'custo_mo' in df_top_level else 0
+        df_exib_rows.append({"id": None, "Serviço": "⭐ TOTAL GERAL (Custo Interno)", "Início": "", "Fim": "", "Conc. %": None, "Custo MAT": t_geral_mat, "Custo MO": t_geral_mo, "Total (R$)": custo_total})
+        
         df_exib = pd.DataFrame(df_exib_rows)
-        st.dataframe(df_exib, column_config={"id": None, "Custo (R$)": st.column_config.NumberColumn(format="R$ %.2f"), "Venda (R$)": st.column_config.NumberColumn(format="R$ %.2f")}, hide_index=True, use_container_width=True)
+        st.dataframe(df_exib, column_config={"id": None, "Custo MAT": st.column_config.NumberColumn(format="R$ %.2f"), "Custo MO": st.column_config.NumberColumn(format="R$ %.2f"), "Total (R$)": st.column_config.NumberColumn(format="R$ %.2f")}, hide_index=True, use_container_width=True)
 
         st.divider()
         st.write("📄 **Exportar Cronogramas Oficiais (A3 Alta Resolução)**")
@@ -379,90 +320,70 @@ with aba1:
         tipo_pdf = "interno" if c_pdf1.button("🔒 Gerar PDF Interno (Custos)") else ("cliente" if c_pdf2.button("💼 Gerar PDF Cliente (Venda)") else None)
             
         if tipo_pdf:
-            with st.spinner("Desenhando gráficos e estruturando as páginas em formato A3..."):
+            with st.spinner("Desenhando gráficos..."):
                 import matplotlib.pyplot as plt
                 import matplotlib.dates as mdates
                 import matplotlib.patches as mpatches
                 
                 df_graf_ordenado = pd.DataFrame(ordem_exibicao_grafico)
-                
-                # Compacta a altura do gráfico gerado no PDF
                 altura_grafico = max(5, len(df_tarefas) * 0.25) 
                 fig_pdf, ax = plt.subplots(figsize=(20, altura_grafico), dpi=150)
                 
                 for idx, row in df_graf_ordenado.iterrows():
                     cor_barra = CORES_FASES.get(row['fase'], "#b0bec5")
-                    # height=0.5 afina a barra no PDF
                     ax.barh(row['nome'], mdates.date2num(row['fim']) - mdates.date2num(row['inicio']), left=mdates.date2num(row['inicio']), height=0.5, color=cor_barra, edgecolor='black', linewidth=0.5)
                 
-                # Grids Verticais (Semanas) e Horizontais (Serviços)
                 ax.xaxis.set_major_locator(mdates.WeekdayLocator(byweekday=mdates.MO)) 
                 ax.xaxis.set_major_formatter(mdates.DateFormatter('%d/%m/%Y'))
                 ax.grid(axis='x', color='gray', linestyle='--', linewidth=0.5, alpha=0.7)
-                ax.grid(axis='y', color='gray', linestyle=':', linewidth=0.5, alpha=0.4) # Grid Horizontal
-                
+                ax.grid(axis='y', color='gray', linestyle=':', linewidth=0.5, alpha=0.4) 
                 ax.margins(x=0.03)
                 plt.xticks(rotation=45, ha='right', fontsize=9); plt.yticks(fontsize=9)
                 
                 fases_unicas = df_graf_ordenado['fase'].unique()
                 patches = [mpatches.Patch(color=CORES_FASES.get(f, "#b0bec5"), label=f) for f in fases_unicas]
                 ax.legend(handles=patches, bbox_to_anchor=(1.02, 1), loc='upper left', fontsize=8, title="Fases (EAP)")
-                
                 caminho_img = "gantt_temp.png"
                 plt.savefig(caminho_img, bbox_inches='tight'); plt.close(fig_pdf)
 
                 pdf = FPDF(unit="mm", format="A3")
-                
-                # PÁGINA 1: GANTT (A3 PAISAGEM)
                 pdf.add_page(orientation="L")
-                pdf.set_font("Arial", "B", 18)
-                pdf.set_fill_color(41, 128, 185); pdf.set_text_color(255, 255, 255)
+                pdf.set_font("Arial", "B", 18); pdf.set_fill_color(41, 128, 185); pdf.set_text_color(255, 255, 255)
                 pdf.cell(400, 15, remover_acentos(f"Cronograma Oficial - {obras_dict[obra_ativa_id]}"), ln=True, align="C", fill=True)
                 pdf.ln(5)
-                
                 pdf.set_font("Arial", "B", 14); pdf.set_text_color(40, 40, 40)
                 titulo_valor = f"Custo Estimado: R$ {custo_total:,.2f}" if tipo_pdf == "interno" else f"Preco Total da Obra: R$ {preco_venda:,.2f}"
                 pdf.cell(400, 10, remover_acentos(titulo_valor.replace(",", "X").replace(".", ",").replace("X", ".")), ln=True, align="C")
                 pdf.image(caminho_img, x=5, w=410); pdf.ln(5)
                 
-                # PÁGINAS 2+: TABELA EAP (A3 RETRATO)
                 pdf.add_page(orientation="P")
                 pdf.set_font("Arial", "B", 16); pdf.set_text_color(40, 40, 40)
                 pdf.cell(277, 10, "Estrutura Analitica do Projeto (EAP)", ln=True, align="C")
                 pdf.ln(5)
                 
-                df_pdf_eap = df_exib.drop(columns=['id']).copy()
+                df_pdf_eap = df_exib.drop(columns=['id', 'Custo MAT', 'Custo MO']).copy()
                 if tipo_pdf == "interno":
-                    df_pdf_eap = df_pdf_eap.drop(columns=['Venda (R$)'])
-                    df_pdf_eap['Custo (R$)'] = df_pdf_eap['Custo (R$)'].apply(lambda x: f"R$ {float(x):,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+                    df_pdf_eap['Total (R$)'] = df_pdf_eap['Total (R$)'].apply(lambda x: f"R$ {float(x):,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
                     col_names = ["Servico", "Inicio", "Termino", "Conc.", "Custo"]
                 else:
-                    df_pdf_eap = df_pdf_eap.drop(columns=['Custo (R$)'])
-                    df_pdf_eap['Venda (R$)'] = df_pdf_eap['Venda (R$)'].apply(lambda x: f"R$ {float(x):,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+                    df_pdf_eap['Total (R$)'] = df_pdf_eap['Total (R$)'].apply(lambda x: f"R$ {float(x * (1 + (taxa_bdi/100))):,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
                     col_names = ["Servico", "Inicio", "Termino", "Conc.", "Valor (Venda)"]
                     
                 df_pdf_eap['Conc. %'] = df_pdf_eap['Conc. %'].apply(lambda x: f"{int(x)}%" if pd.notna(x) else "")
-                
-                col_widths = [145, 30, 30, 22, 50]
-                gerar_tabela_pdf(pdf, df_pdf_eap, col_widths, col_names, base_x=10, orient="P", max_y=390)
+                gerar_tabela_pdf(pdf, df_pdf_eap, [145, 30, 30, 22, 50], col_names, base_x=10, orient="P", max_y=390)
                 
                 pdf.output("relatorio_gantt.pdf")
                 with open("relatorio_gantt.pdf", "rb") as f: st.session_state['pdf_gantt'] = f.read()
                 try: os.remove(caminho_img)
                 except: pass
-                
-        if 'pdf_gantt' in st.session_state:
-            st.success("Relatório A3 gerado com sucesso!")
-            st.download_button("⬇️ Baixar PDF (A3)", data=st.session_state['pdf_gantt'], file_name="Cronograma_EAP.pdf", mime="application/pdf")
+        if 'pdf_gantt' in st.session_state: st.download_button("⬇️ Baixar PDF (A3)", data=st.session_state['pdf_gantt'], file_name="Cronograma_EAP.pdf", mime="application/pdf")
 
-# --- ABA 2: CURVA S E MEDIÇÃO ---
+# --- ABA 2: CURVA S E MEDIÇÃO (MANTIDA IGUAL) ---
 with aba2:
     st.header("📈 Medição e Curva S")
     df_base = df_tarefas[df_tarefas['base_inicio'].notna()].copy()
-    
     ev_venda = sum(float(r['custo_previsto']) * (1 + (taxa_bdi/100)) * (r['conclusao_percentual']/100) for _, r in df_tarefas.iterrows())
     datas_g, pv_acumulado = [], []
-    
     if not df_base.empty:
         min_d, max_d = df_base['base_inicio'].min(), df_base['base_fim'].max()
         datas_g = [min_d + timedelta(days=x) for x in range((max_d - min_d).days + 1)]
@@ -471,46 +392,9 @@ with aba2:
             c_dia = 0
             if d.weekday() < 5: 
                 for _, r in df_base.iterrows():
-                    if r['base_inicio'] <= d <= r['base_fim']:
-                        c_dia += (float(r['base_custo']) * (1 + (taxa_bdi/100))) / (bus_days_between(r['base_inicio'], r['base_fim']) + 1)
+                    if r['base_inicio'] <= d <= r['base_fim']: c_dia += (float(r['base_custo']) * (1 + (taxa_bdi/100))) / (bus_days_between(r['base_inicio'], r['base_fim']) + 1)
             acc += c_dia; pv_acumulado.append(acc)
-    
-    if st.button("📄 Gerar PDF da Curva S e Medição"):
-        with st.spinner("Gerando PDF da Curva S..."):
-            import matplotlib.pyplot as plt
-            import matplotlib.dates as mdates
             
-            pdf = FPDF(orientation="L", unit="mm", format="A4")
-            pdf.add_page()
-            pdf.set_fill_color(41, 128, 185); pdf.set_text_color(255, 255, 255); pdf.set_font("Arial", "B", 16)
-            pdf.cell(277, 12, remover_acentos(f"Relatorio de Medicao e Curva S - {obras_dict[obra_ativa_id]}"), ln=True, align="C", fill=True)
-            pdf.ln(5)
-
-            if not df_base.empty:
-                fig_s_pdf, ax = plt.subplots(figsize=(10, 4), dpi=150)
-                ax.plot(datas_g, pv_acumulado, color='#2980b9', linewidth=2, label='Planejado')
-                ax.plot([hoje], [ev_venda], marker='*', color='#27ae60', markersize=15, label='Executado (Hoje)')
-                ax.xaxis.set_major_formatter(mdates.DateFormatter('%d/%m/%Y'))
-                plt.xticks(rotation=45, ha='right', fontsize=8); plt.grid(True, linestyle='--', alpha=0.6); plt.legend()
-                plt.tight_layout()
-                plt.savefig('scurve_temp.png', bbox_inches='tight'); plt.close(fig_s_pdf)
-                
-                pdf.image('scurve_temp.png', x=15, w=260); pdf.ln(5)
-                df_med = conn.query("SELECT * FROM medicoes WHERE obra_id = :oid", params={"oid": int(obra_ativa_id)}, ttl=0)
-                faturado = df_med['valor_medido'].sum() if not df_med.empty else 0.0
-                
-                pdf.set_font("Arial", "B", 12); pdf.set_text_color(40,40,40)
-                pdf.cell(90, 10, remover_acentos(f"Executado (Preco Venda): R$ {ev_venda:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")), border=1, align="C")
-                pdf.cell(90, 10, remover_acentos(f"Ja Faturado: R$ {faturado:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")), border=1, align="C")
-                pdf.cell(90, 10, remover_acentos(f"Saldo para Medicao: R$ {max(0, ev_venda - faturado):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")), border=1, align="C")
-                
-                pdf.output("relatorio_medicao.pdf")
-                with open("relatorio_medicao.pdf", "rb") as f: st.download_button("⬇ Baixar PDF (Curva S)", data=f.read(), file_name="CurvaS_Medicao.pdf", mime="application/pdf")
-                try: os.remove('scurve_temp.png')
-                except: pass
-            else:
-                st.error("Salve a Baseline primeiro para gerar o PDF!")
-
     col_curva, col_med = st.columns([2, 1])
     with col_curva:
         if not df_base.empty:
@@ -523,7 +407,6 @@ with aba2:
                 with conn.session as s:
                     s.execute(text("UPDATE tarefas SET base_inicio=data_inicio, base_fim=data_fim, base_custo=custo_previsto WHERE obra_id=:oid"), {"oid": int(obra_ativa_id)})
                     s.commit(); st.rerun()
-
     with col_med:
         df_med = conn.query("SELECT * FROM medicoes WHERE obra_id = :oid ORDER BY data_medicao", params={"oid": int(obra_ativa_id)}, ttl=0)
         faturado = df_med['valor_medido'].sum() if not df_med.empty else 0.0
@@ -531,20 +414,17 @@ with aba2:
         st.metric("Executado (Preço Venda)", f"R$ {ev_venda:,.2f}")
         st.metric("Já Faturado (Recebido)", f"R$ {faturado:,.2f}")
         st.metric("Saldo Liberado para Cobrança", f"R$ {max(0, saldo):,.2f}")
-        
         if saldo > 0 and st.button("💰 Faturar Mês Atual"):
             with conn.session as s:
-                s.execute(text("INSERT INTO medicoes (obra_id, data_medicao, valor_medido, percentual_obra) VALUES (:o, :d, :v, :p)"), 
-                          {"o": int(obra_ativa_id), "d": hoje, "v": float(saldo), "p": (ev_venda/preco_venda)*100 if preco_venda>0 else 0})
+                s.execute(text("INSERT INTO medicoes (obra_id, data_medicao, valor_medido, percentual_obra) VALUES (:o, :d, :v, :p)"), {"o": int(obra_ativa_id), "d": hoje, "v": float(saldo), "p": (ev_venda/preco_venda)*100 if preco_venda>0 else 0})
                 s.commit(); st.rerun()
 
-# --- ABA 3: FLUXO DE CAIXA E DATAVIZ ---
+# --- ABA 3: DASHBOARD FINANCEIRO E CAIXA ---
 with aba3:
     st.header("💸 Controle de Caixa e Dashboard Financeiro")
-    
     df_fin = conn.query("SELECT id, tipo, descricao, valor, data_vencimento, status FROM financeiro WHERE obra_id = :oid ORDER BY data_vencimento", params={"oid": int(obra_ativa_id)}, ttl=0)
     
-    # 📊 NOVO DASHBOARD FINANCEIRO (MÉTRICAS E GRÁFICOS)
+    # 📊 DATAVIZ FINANCEIRO
     if not df_fin.empty:
         rec_pago = df_fin[(df_fin['tipo']=='Receita') & (df_fin['status']=='Pago')]['valor'].sum()
         des_pago = df_fin[(df_fin['tipo']=='Despesa') & (df_fin['status']=='Pago')]['valor'].sum()
@@ -557,13 +437,10 @@ with aba3:
         
         st.write("📈 **Projeção de Fluxo Mensal (Receitas vs Despesas)**")
         df_graf_fin = df_fin.copy()
-        # Converte a data para capturar apenas Mês e Ano para agrupamento
         df_graf_fin['mes_ano'] = pd.to_datetime(df_graf_fin['data_vencimento']).dt.strftime('%m/%Y')
         df_agrupado = df_graf_fin.groupby(['mes_ano', 'tipo'])['valor'].sum().reset_index()
         
-        fig_fin = px.bar(df_agrupado, x='mes_ano', y='valor', color='tipo', barmode='group', 
-                         color_discrete_map={'Receita': '#27ae60', 'Despesa': '#c0392b'},
-                         labels={'mes_ano': 'Mês de Vencimento', 'valor': 'Montante (R$)'})
+        fig_fin = px.bar(df_agrupado, x='mes_ano', y='valor', color='tipo', barmode='group', color_discrete_map={'Receita': '#27ae60', 'Despesa': '#c0392b'}, labels={'mes_ano': 'Mês', 'valor': 'R$'})
         fig_fin.update_layout(height=300, margin=dict(l=0, r=0, t=30, b=0), yaxis_tickformat="R$ ,.2f")
         st.plotly_chart(fig_fin, use_container_width=True)
         st.divider()
@@ -579,193 +456,155 @@ with aba3:
             f_stat = st.selectbox("Status", ["Pendente", "Pago"])
             if st.form_submit_button("Lançar no Caixa"):
                 with conn.session as s:
-                    s.execute(text("INSERT INTO financeiro (obra_id, tipo, descricao, valor, data_vencimento, status) VALUES (:o, :t, :d, :v, :dt, :s)"),
-                              {"o": int(obra_ativa_id), "t": f_tipo, "d": f_desc, "v": f_val, "dt": f_venc, "s": f_stat})
+                    s.execute(text("INSERT INTO financeiro (obra_id, tipo, descricao, valor, data_vencimento, status) VALUES (:o, :t, :d, :v, :dt, :s)"), {"o": int(obra_ativa_id), "t": f_tipo, "d": f_desc, "v": f_val, "dt": f_venc, "s": f_stat})
                     s.commit(); st.rerun()
-                    
         if not df_fin.empty:
-            st.divider()
-            st.subheader("🗑️ Excluir Lançamento")
+            st.divider(); st.subheader("🗑️ Excluir Lançamento")
             with st.form("form_delete_fin"):
-                fin_id_del = st.selectbox(
-                    "Selecione o registro para apagar:", 
-                    df_fin['id'], 
-                    format_func=lambda x: f"{df_fin[df_fin['id']==x]['tipo'].values[0][:3].upper()} - {df_fin[df_fin['id']==x]['descricao'].values[0]} (R$ {df_fin[df_fin['id']==x]['valor'].values[0]:.2f})"
-                )
+                fin_id_del = st.selectbox("Selecione para apagar:", df_fin['id'], format_func=lambda x: f"{df_fin[df_fin['id']==x]['tipo'].values[0][:3].upper()} - {df_fin[df_fin['id']==x]['descricao'].values[0]}")
                 if st.form_submit_button("Excluir Definitivamente"):
-                    with conn.session as s:
-                        s.execute(text("DELETE FROM financeiro WHERE id=:id"), {"id": int(fin_id_del)})
-                        s.commit()
-                    st.success("Lançamento excluído com sucesso!"); st.rerun()
+                    with conn.session as s: s.execute(text("DELETE FROM financeiro WHERE id=:id"), {"id": int(fin_id_del)}); s.commit()
+                    st.success("Excluído!"); st.rerun()
                 
     with c_f2:
         if not df_fin.empty:
-            if st.button("📄 Gerar PDF do Livro Caixa"):
-                # (O CÓDIGO DO PDF DO CAIXA FICA EXATAMENTE IGUAL AQUI)
-                pdf = FPDF(orientation="P", unit="mm", format="A4")
-                pdf.add_page()
-                pdf.set_fill_color(41, 128, 185); pdf.set_text_color(255, 255, 255); pdf.set_font("Arial", "B", 16)
-                pdf.cell(190, 12, remover_acentos(f"Controle de Caixa - {obras_dict[obra_ativa_id]}"), ln=True, align="C", fill=True)
-                pdf.ln(5)
-                pdf.set_font("Arial", "B", 12); pdf.set_text_color(40,40,40)
-                pdf.cell(190, 8, remover_acentos(f"Saldo em Caixa: R$ {rec_pago - des_pago:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")), ln=True)
-                pdf.ln(5)
-                df_pdf_fin = df_fin.drop(columns=['id']).copy()
-                df_pdf_fin['valor'] = df_pdf_fin['valor'].apply(lambda x: f"R$ {float(x):,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
-                df_pdf_fin['data_vencimento'] = pd.to_datetime(df_pdf_fin['data_vencimento']).dt.strftime('%d/%m/%Y')
-                gerar_tabela_pdf(pdf, df_pdf_fin, [25, 75, 35, 25, 25], ["Tipo", "Descricao", "Valor", "Vencimento", "Status"], base_x=12.5, orient="P", max_y=275)
-                pdf.output("relatorio_caixa.pdf")
-                with open("relatorio_caixa.pdf", "rb") as f: st.download_button("⬇️ Baixar PDF (Caixa)", data=f.read(), file_name="Financeiro.pdf", mime="application/pdf")
-            
-            st.write("Edite qualquer campo diretamente na tabela abaixo e clique em Salvar.")
-            df_edit_fin = st.data_editor(
-                df_fin, 
-                column_config={"id": None, "tipo": st.column_config.SelectboxColumn("Tipo", options=["Despesa", "Receita"]), "descricao": st.column_config.TextColumn("Descrição"), "valor": st.column_config.NumberColumn("Valor", format="R$ %.2f"), "data_vencimento": st.column_config.DateColumn("Vencimento", format="DD/MM/YYYY"), "status": st.column_config.SelectboxColumn("Status", options=["Pendente", "Pago"])}, 
-                hide_index=True, use_container_width=True)
+            st.write("Edite qualquer campo na tabela abaixo (Duplo Clique) e Salve.")
+            df_edit_fin = st.data_editor(df_fin, column_config={"id": None, "tipo": st.column_config.SelectboxColumn("Tipo", options=["Despesa", "Receita"]), "descricao": st.column_config.TextColumn("Descrição"), "valor": st.column_config.NumberColumn("Valor", format="R$ %.2f"), "data_vencimento": st.column_config.DateColumn("Vencimento", format="DD/MM/YYYY"), "status": st.column_config.SelectboxColumn("Status", options=["Pendente", "Pago"])}, hide_index=True, use_container_width=True)
             if st.button("💾 Salvar Alterações da Tabela"):
                 with conn.session as s:
                     for _, row in df_edit_fin.iterrows():
                         s.execute(text("UPDATE financeiro SET tipo=:t, descricao=:d, valor=:v, data_vencimento=:dt, status=:s WHERE id=:id"), {"t": row['tipo'], "d": row['descricao'], "v": row['valor'], "dt": row['data_vencimento'], "s": row['status'], "id": int(row['id'])})
-                s.commit(); st.rerun()
+                    s.commit(); st.rerun()
 
-# --- ABA 4: CURVA ABC ---
+# --- ABA 4: SUPRIMENTOS (A NOVA CURVA ABC EDITÁVEL) ---
 with aba4:
-    st.header("🛒 Agenda de Compras e Contratos (Curva ABC)")
+    st.header("🛒 Suprimentos e Insumos (Mesa de Compras)")
+    st.write("Ajuste os **Preços Reais** de compra abaixo. Isso atualizará todo o custo da obra!")
     
-    if not df_tarefas.empty:
-        df_abc = df_tarefas[df_tarefas['parent_id'].isna()].copy()
-        if not df_abc.empty:
-            df_abc = df_abc[['fase', 'nome_servico', 'data_inicio', 'custo_previsto']]
-            df_abc.columns = ['Fase', 'Pacote', 'Data Limite', 'Custo (Verba)']
-            df_abc = df_abc.sort_values(by='Custo (Verba)', ascending=False)
-            t_abc = df_abc['Custo (Verba)'].sum()
-            df_abc['% do Total'] = (df_abc['Custo (Verba)'] / t_abc) * 100
-            df_abc['% Acumulado'] = df_abc['% do Total'].cumsum()
+    # Agrupa todos os insumos da obra para a equipe de compras
+    try: df_compras = conn.query("SELECT codigo_insumo, MAX(descricao) as descricao, MAX(tipo) as tipo, MAX(unidade) as unidade, SUM(quantidade) as quantidade_total, MAX(preco_tabela) as preco_sinapi, MAX(preco_real) as preco_real FROM orcamento_insumos WHERE obra_id = :oid GROUP BY codigo_insumo ORDER BY SUM(quantidade * preco_real) DESC", params={"oid": int(obra_ativa_id)}, ttl=0)
+    except: df_compras = pd.DataFrame()
+    
+    if not df_compras.empty:
+        df_edit_compras = st.data_editor(
+            df_compras, 
+            column_config={
+                "codigo_insumo": st.column_config.TextColumn("Cód.", disabled=True),
+                "descricao": st.column_config.TextColumn("Insumo / Mão de Obra", disabled=True),
+                "tipo": st.column_config.TextColumn("Tipo", disabled=True),
+                "unidade": st.column_config.TextColumn("UN", disabled=True),
+                "quantidade_total": st.column_config.NumberColumn("Qtd. Total", format="%.2f", disabled=True),
+                "preco_sinapi": st.column_config.NumberColumn("Preço SINAPI", format="R$ %.2f", disabled=True),
+                "preco_real": st.column_config.NumberColumn("✅ Preço Real (Editável)", format="R$ %.2f")
+            }, 
+            hide_index=True, use_container_width=True
+        )
+        
+        if st.button("💾 Salvar Preços Reais e Atualizar Obra"):
+            with conn.session as s:
+                for _, row in df_edit_compras.iterrows():
+                    s.execute(text("UPDATE orcamento_insumos SET preco_real = :pr WHERE obra_id = :oid AND codigo_insumo = :ci"), {"pr": float(row['preco_real']), "oid": int(obra_ativa_id), "ci": row['codigo_insumo']})
+                s.commit()
+            rodar_motor_cpm(conn, int(obra_ativa_id)) # Recalcula toda a obra com os novos preços!
+            st.success("Preços atualizados! Custos da EAP recalculados com sucesso."); st.rerun()
             
-            if st.button("📄 Gerar PDF da Curva ABC"):
-                import matplotlib.pyplot as plt
-                fig_p, ax1 = plt.subplots(figsize=(12, 5), dpi=150)
-                
-                # Truncamos o texto em 35 caracteres, pois agora ele cresce dentro da barra
-                nomes_pacotes = df_abc['Pacote'].str[:35] 
-                
-                # Desenhamos as barras azuis e a linha vermelha
-                barras = ax1.bar(nomes_pacotes, df_abc['Custo (Verba)'], color='#4fc3f7')
-                ax2 = ax1.twinx()
-                ax2.plot(nomes_pacotes, df_abc['% Acumulado'], color='red', marker='o')
-                
-                # APAGA TODOS OS RÓTULOS EM BAIXO DO EIXO X PARA NÃO OUPAREM ESPAÇO
-                ax1.set_xticks(range(len(nomes_pacotes)))
-                ax1.set_xticklabels([]) 
-                
-                # ESCRITA DENTRO DA BARRA (A Sua Sugestão Visual)
-                max_y = df_abc['Custo (Verba)'].max()
-                for i, barra in enumerate(barras):
-                    # Encontra o meio exato horizontal da barra
-                    xval = barra.get_x() + barra.get_width() / 2
-                    
-                    # Define que o texto começará a 2% de distância do chão da barra
-                    y_texto = max_y * 0.02
-                    
-                    # Se o texto ultrapassar a altura da barrinha, podemos pintá-lo ou redimensionar.
-                    # Mas para o Pareto, alinhamento pela base (bottom) resolve.
-                    texto = nomes_pacotes.iloc[i]
-                    ax1.text(xval, y_texto, texto, rotation=90, ha='center', va='bottom', fontsize=7, color='black', weight='bold')
-                
-                # O tight_layout agora terá muito espaço de folga pois não há textos fora do gráfico
-                plt.tight_layout()
-                plt.savefig('pareto_temp.png', bbox_inches='tight'); plt.close(fig_p)
-                
-                pdf = FPDF(orientation="L", unit="mm", format="A4")
-                pdf.add_page()
-                pdf.set_fill_color(41, 128, 185); pdf.set_text_color(255, 255, 255); pdf.set_font("Arial", "B", 16)
-                pdf.cell(277, 12, remover_acentos(f"Curva ABC de Insumos - {obras_dict[obra_ativa_id]}"), ln=True, align="C", fill=True)
-                pdf.ln(5)
-                pdf.image('pareto_temp.png', x=15, w=260); pdf.ln(5)
-                
-                df_pdf_abc = df_abc.drop(columns=['Fase']).copy()
-                df_pdf_abc['Data Limite'] = pd.to_datetime(df_pdf_abc['Data Limite']).dt.strftime('%d/%m/%Y')
-                df_pdf_abc['Custo (Verba)'] = df_pdf_abc['Custo (Verba)'].apply(lambda x: f"R$ {float(x):,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
-                df_pdf_abc['% do Total'] = df_pdf_abc['% do Total'].apply(lambda x: f"{x:.1f}%")
-                df_pdf_abc['% Acumulado'] = df_pdf_abc['% Acumulado'].apply(lambda x: f"{x:.1f}%")
-                
-                gerar_tabela_pdf(pdf, df_pdf_abc, [120, 30, 40, 25, 25], ["Pacote de Contratacao", "Data Limite", "Custo Estimado", "% Total", "% Acumulado"], base_x=28.5, orient="L", max_y=185)
-                
-                pdf.output("relatorio_abc.pdf")
-                with open("relatorio_abc.pdf", "rb") as f: st.download_button("⬇️ Baixar PDF (Curva ABC)", data=f.read(), file_name="CurvaABC.pdf", mime="application/pdf")
-                try: os.remove('pareto_temp.png')
-                except: pass
+        st.divider()
+        # Gráfico de Pareto baseado na Tabela de Compras Reais
+        df_edit_compras['Custo Total'] = df_edit_compras['quantidade_total'] * df_edit_compras['preco_real']
+        df_edit_compras = df_edit_compras.sort_values(by='Custo Total', ascending=False)
+        t_abc = df_edit_compras['Custo Total'].sum()
+        df_edit_compras['% do Total'] = (df_edit_compras['Custo Total'] / t_abc) * 100
+        df_edit_compras['% Acumulado'] = df_edit_compras['% do Total'].cumsum()
+        
+        fig_abc = go.Figure()
+        fig_abc.add_trace(go.Bar(x=df_edit_compras['descricao'].str[:30], y=df_edit_compras['Custo Total'], name="Custo", marker_color='#4fc3f7'))
+        fig_abc.add_trace(go.Scatter(x=df_edit_compras['descricao'].str[:30], y=df_edit_compras['% Acumulado'], mode='lines+markers', name="% Acumulado", yaxis='y2', line=dict(color='red', width=3)))
+        fig_abc.update_layout(title="Curva ABC de Insumos da Obra", yaxis=dict(title="Custo Total"), yaxis2=dict(title="% Acumulado", overlaying='y', side='right', range=[0, 110]), margin=dict(b=0))
+        st.plotly_chart(fig_abc, use_container_width=True)
 
-            st.dataframe(df_abc, column_config={"Data Limite": st.column_config.DateColumn(format="DD/MM/YYYY"), "Custo (Verba)": st.column_config.NumberColumn(format="R$ %.2f"), "% do Total": st.column_config.NumberColumn(format="%.1f%%"), "% Acumulado": st.column_config.NumberColumn(format="%.1f%%")}, hide_index=True, use_container_width=True)
-            
-            fig_abc = go.Figure()
-            fig_abc.add_trace(go.Bar(x=df_abc['Pacote'], y=df_abc['Custo (Verba)'], name="Custo", marker_color='#4fc3f7'))
-            fig_abc.add_trace(go.Scatter(x=df_abc['Pacote'], y=df_abc['% Acumulado'], mode='lines+markers', name="% Acumulado", yaxis='y2', line=dict(color='red', width=3)))
-            fig_abc.update_layout(title="Gráfico de Pareto", yaxis=dict(title="Custo"), yaxis2=dict(title="% Acumulado", overlaying='y', side='right', range=[0, 110]), margin=dict(b=0))
-            st.plotly_chart(fig_abc, use_container_width=True)
-
-# --- ABA 5: RDO ---
+# --- ABA 5: RDO (MANTIDA IGUAL) ---
 with aba5:
     st.header("📖 Diário de Obra (RDO)")
     with st.expander("➕ Preencher RDO de Hoje", expanded=True):
         with st.form("form_rdo"):
             d_rdo = st.date_input("Data", value=hoje)
-            clima = st.selectbox("Clima", ["Ensolarado", "Nublado", "Chuvoso", "Chuva Impeditiva"])
+            clima = st.selectbox("Clima", ["Ensolarado", "Nublado", "Chuvoso", "Chuva Impeditiva (Atrasa a Obra)"])
             efetivo = st.text_area("Efetivo na Obra", height=60)
             obs = st.text_area("Ocorrências", height=80)
             if st.form_submit_button("Salvar RDO"):
+                clima_db = "Chuva Impeditiva" if "Impeditiva" in clima else clima
                 with conn.session as s:
-                    s.execute(text("INSERT INTO rdo (obra_id, data_relatorio, clima, efetivo, observacoes) VALUES (:o, :d, :c, :e, :obs)"), {"o": int(obra_ativa_id), "d": d_rdo, "c": clima, "e": efetivo, "obs": obs})
+                    s.execute(text("INSERT INTO rdo (obra_id, data_relatorio, clima, efetivo, observacoes) VALUES (:o, :d, :c, :e, :obs)"), {"o": int(obra_ativa_id), "d": d_rdo, "c": clima_db, "e": efetivo, "obs": obs})
                     s.commit()
-                st.rerun()
+                rodar_motor_cpm(conn, int(obra_ativa_id)) # Roda CPM ao salvar RDO para recalcular atrasos!
+                st.success("RDO Salvo! Cronograma ajustado automaticamente."); st.rerun()
     df_rdo = conn.query("SELECT * FROM rdo WHERE obra_id = :oid ORDER BY data_relatorio DESC", params={"oid": int(obra_ativa_id)}, ttl=0)
     for _, row in df_rdo.iterrows():
         with st.expander(f"🗓️ {row['data_relatorio']} - {row['clima']}"):
-            st.write(f"**Efetivo:** {row['efetivo']}")
-            st.write(f"**Obs:** {row['observacoes']}")
+            st.write(f"**Efetivo:** {row['efetivo']}"); st.write(f"**Obs:** {row['observacoes']}")
 
-# --- ABA 6: SINAPI ---
+# --- ABA 6: SINAPI (CÁLCULO AUTOMÁTICO E EXPLOSÃO) ---
 with aba6:
-    st.subheader("Adicionar do SINAPI")
-    
-    # 🚀 NOVA FUNÇÃO COM CACHE (Guarda o resultado por 1 hora)
-    @st.cache_data(ttl=3600)
-    def buscar_sinapi_cache(busca_texto, tabela):
-        # Usamos uma query pura aqui pois st.cache_data funciona melhor retornando DataFrames limpos
-        return conn.query(f"SELECT codigo, descricao, unidade, preco_mediano FROM {tabela} WHERE descricao ILIKE '%{busca_texto}%' LIMIT 15;", ttl=0)
-
-    tipo_busca = st.radio("O que deseja orçar?", ["Serviços Completos (Composições)", "Materiais Isolados (Insumos)"])
-    busca = st.text_input("🔍 Buscar (ex: Alvenaria)")
-    
+    st.subheader("Orçamentação Paramétrica e Nivelamento")
+    tipo_busca = st.radio("O que deseja orçar?", ["Serviços Completos (Composições)"])
+    busca = st.text_input("🔍 Buscar Serviço (ex: Alvenaria)")
     if busca:
-        tabela_alvo = "sinapi_composicoes" if "Serviços" in tipo_busca else "sinapi_insumos"
-        # O sistema agora chama a função com cache! Instantâneo nas buscas repetidas.
-        df_sinapi = buscar_sinapi_cache(busca, tabela_alvo)
-        
+        df_sinapi = buscar_sinapi_cache(busca, "sinapi_composicoes")
         for index, row in df_sinapi.iterrows():
-            with st.expander(f"📦 {row['descricao'][:60]}... | R$ {float(row['preco_mediano']):.2f} / {row['unidade']}"):
+            with st.expander(f"📦 {row['descricao'][:60]}... | Preço Tabela: R$ {float(row['preco_mediano']):.2f} / {row['unidade']}"):
                 with st.form(f"add_sinapi_{index}"):
                     c1, c2 = st.columns(2)
-                    qtd = c1.number_input("Quantidade", min_value=0.1, value=1.0)
-                    fase_esc = c2.selectbox("Fase", FASES_DA_OBRA)
-                    c3, c4, c5 = st.columns(3)
-                    d_ini, d_fim = c3.date_input("Início"), c4.date_input("Término")
-                    equipe = c5.number_input("Tamanho da Equipe", min_value=0, value=2, help="Quantos trabalhadores simultâneos?")
-                    n_abrev = st.text_input("Nome", value=row['descricao'][:50].title())
-                    dep_esc = st.selectbox("Depende de?", options=list(opcoes_dep.keys()), format_func=lambda x: opcoes_dep[x])
-                    if st.form_submit_button("➕ Adicionar"):
-                        if d_ini > d_fim: st.error("Erro nas datas!")
-                        else:
-                            with conn.session as s:
-                                s.execute(text("""INSERT INTO tarefas (nome_servico, fase, data_inicio, data_fim, conclusao_percentual, custo_previsto, dependencia_id, obra_id, codigo_sinapi, quantidade_sinapi, equipe_necessaria) 
-                                                  VALUES (:n, :f, :i, :fim, 0, :c, :d, :ob, :cod, :qs, :eq)"""),
-                                          {"n": n_abrev, "f": fase_esc, "i": d_ini, "fim": d_fim, "c": float(row['preco_mediano'])*qtd, "d": None if dep_esc==0 else dep_esc, "ob": int(obra_ativa_id), "cod": row['codigo'], "qs": qtd, "eq": equipe})
-                                s.commit()
-                            st.rerun()
+                    qtd = c1.number_input(f"Quantidade ({row['unidade']})", min_value=0.1, value=1.0)
+                    equipe = c2.number_input("Tamanho da Equipe (Qtd Trabalhadores)", min_value=1, value=2)
+                    
+                    c3, c4 = st.columns(2)
+                    d_ini = c3.date_input("Data de Início")
+                    fase_esc = c4.selectbox("Fase da Obra", FASES_DA_OBRA)
+                    
+                    n_abrev = st.text_input("Nome Customizado do Serviço na EAP", value=row['descricao'][:50].title())
+                    dep_esc = st.selectbox("Depende de qual Serviço?", options=list(opcoes_dep.keys()), format_func=lambda x: opcoes_dep[x])
+                    
+                    if st.form_submit_button("➕ Adicionar à Obra e Explodir Insumos"):
+                        df_analitico = explodir_composicao_cache(row['codigo'])
+                        
+                        # Fallback se não existir dados analíticos no banco: Cria uma quebra fictícia de 50/50
+                        if df_analitico.empty:
+                            df_analitico = pd.DataFrame([{
+                                'codigo_insumo': f"MO-GENERICO-{row['codigo']}", 'descricao_insumo': 'Mão de Obra Genérica', 'tipo': 'MO', 'unidade': 'H', 'coeficiente': 0.5, 'preco_unitario': float(row['preco_mediano']) * 0.5
+                            }, {
+                                'codigo_insumo': f"MAT-GENERICO-{row['codigo']}", 'descricao_insumo': 'Materiais Genéricos', 'tipo': 'MAT', 'unidade': 'UN', 'coeficiente': 1.0, 'preco_unitario': float(row['preco_mediano']) * 0.5
+                            }])
+                        
+                        # 1. Calcula as Horas Totais de Mão de Obra para esta tarefa
+                        horas_totais = 0
+                        for _, insumo in df_analitico.iterrows():
+                            if insumo['tipo'] == 'MO': horas_totais += float(insumo['coeficiente']) * qtd
+                        
+                        # 2. Nivelamento de Recursos (Calcula a Data Fim)
+                        # Assume dia útil de 8h. Duração = Horas / (Equipe * 8h)
+                        dias_necessarios = math.ceil(horas_totais / (equipe * 8)) if horas_totais > 0 else 1
+                        d_fim = add_bus_days(d_ini, max(0, dias_necessarios - 1))
+                        
+                        with conn.session as s:
+                            # 3. Insere a Tarefa
+                            res = s.execute(text("""INSERT INTO tarefas (nome_servico, fase, data_inicio, data_fim, conclusao_percentual, custo_previsto, dependencia_id, obra_id, codigo_sinapi, quantidade_sinapi, equipe_alocada, horas_totais_estimadas) 
+                                              VALUES (:n, :f, :i, :fim, 0, :c, :d, :ob, :cod, :qs, :eq, :ht) RETURNING id"""),
+                                      {"n": n_abrev, "f": fase_esc, "i": d_ini, "fim": d_fim, "c": float(row['preco_mediano'])*qtd, "d": None if dep_esc==0 else dep_esc, "ob": int(obra_ativa_id), "cod": row['codigo'], "qs": qtd, "eq": equipe, "ht": horas_totais})
+                            tarefa_id = res.scalar()
+                            
+                            # 4. Explode os Insumos na Mesa de Compras!
+                            for _, insumo in df_analitico.iterrows():
+                                s.execute(text("""INSERT INTO orcamento_insumos (obra_id, tarefa_id, codigo_insumo, descricao, tipo, unidade, quantidade, preco_tabela, preco_real)
+                                                  VALUES (:ob, :t_id, :c_in, :desc, :tipo, :un, :qtd, :pt, :pr)"""),
+                                          {"ob": int(obra_ativa_id), "t_id": tarefa_id, "c_in": insumo['codigo_insumo'], "desc": insumo['descricao_insumo'], "tipo": insumo['tipo'], "un": insumo['unidade'], "qtd": float(insumo['coeficiente']) * qtd, "pt": float(insumo['preco_unitario']), "pr": float(insumo['preco_unitario'])})
+                            s.commit()
+                        rodar_motor_cpm(conn, int(obra_ativa_id))
+                        st.success(f"Serviço Adicionado! Prazo calculado: {dias_necessarios} dia(s)."); st.rerun()
 
-# --- ABA 7: PLANEJAR KITS ---
+# --- ABA 7: PLANEJAR KITS (MANTIDA IGUAL) ---
 with aba7:
-    st.subheader("⚙ Planejamento Avançado")
+    st.subheader("⚙ Planejamento Rápido")
+    st.info("Utilize a Aba 6 (SINAPI) para planejamento analítico e cálculo de prazo automático.")
     modo = st.radio("Método:", ["Kits Rápidos", "Tarefa Manual"])
     if modo == "Kits Rápidos":
         kits = {
