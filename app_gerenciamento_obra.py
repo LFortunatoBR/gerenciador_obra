@@ -550,11 +550,21 @@ with aba4:
             
             if st.button("📄 Gerar PDF da Curva ABC"):
                 import matplotlib.pyplot as plt
-                fig_p, ax1 = plt.subplots(figsize=(10, 4), dpi=150)
-                ax1.bar(df_abc['Pacote'].str[:20], df_abc['Custo (Verba)'], color='#4fc3f7')
+                # Aumentamos o tamanho base da imagem e mudamos a rotação dos eixos para 90 graus (Vertical)
+                fig_p, ax1 = plt.subplots(figsize=(12, 5), dpi=150)
+                
+                # Truncamos o texto para 28 caracteres para não achatar demasiado o gráfico verticalmente
+                nomes_pacotes = df_abc['Pacote'].str[:28] 
+                
+                ax1.bar(nomes_pacotes, df_abc['Custo (Verba)'], color='#4fc3f7')
                 ax2 = ax1.twinx()
-                ax2.plot(df_abc['Pacote'].str[:20], df_abc['% Acumulado'], color='red', marker='o')
-                plt.xticks(rotation=45, ha='right', fontsize=8); plt.tight_layout()
+                ax2.plot(nomes_pacotes, df_abc['% Acumulado'], color='red', marker='o')
+                
+                # Força o alinhamento central com as barras, na vertical (90 graus) e fonte menor (6.5)
+                ax1.set_xticks(range(len(nomes_pacotes)))
+                ax1.set_xticklabels(nomes_pacotes, rotation=90, ha='center', fontsize=6.5)
+                
+                plt.tight_layout()
                 plt.savefig('pareto_temp.png', bbox_inches='tight'); plt.close(fig_p)
                 
                 pdf = FPDF(orientation="L", unit="mm", format="A4")
