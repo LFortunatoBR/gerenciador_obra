@@ -16,7 +16,32 @@ def remover_acentos(texto):
     return s.encode('latin1', 'ignore').decode('latin1')
 
 # ==========================================
-# MOTOR DE TABELAS PDF (CABEÇALHOS REPETIDOS E ORIENTAÇÃO DINÂMICA)
+# PALETA DE CORES PARA AS MACRO-ETAPAS (GANTT E PDF)
+# ==========================================
+CORES_FASES = {
+    "1. Serviços Preliminares e Projetos": "#2196F3", # Azul
+    "2. Canteiro de Obras e Locação": "#FF9800", # Laranja
+    "3. Movimento de Terra (Terraplenagem)": "#795548", # Marrom
+    "4. Fundações e Contenções": "#9E9E9E", # Cinza
+    "5. Superestrutura (Concreto/Aço/Madeira)": "#607D8B", # Azul Acinzentado
+    "6. Alvenaria e Paredes de Vedação": "#FF5722", # Laranja Escuro
+    "7. Coberturas e Impermeabilizações": "#00BCD4", # Ciano
+    "8. Esquadrias, Portas e Janelas": "#E91E63", # Rosa
+    "9. Instalações Hidrossanitárias e Gás": "#03A9F4", # Azul Claro
+    "10. Instalações Elétricas, Lógicas e SPDA": "#FFEB3B", # Amarelo
+    "11. Instalações de Combate a Incêndio": "#F44336", # Vermelho
+    "12. Instalações Especiais e Climatização": "#9C27B0", # Roxo
+    "13. Revestimentos Internos e Externos": "#8BC34A", # Verde Claro
+    "14. Pisos e Rodapés": "#4CAF50", # Verde
+    "15. Forros e Pinturas": "#CDDC39", # Lima
+    "16. Louças, Metais e Acessórios": "#009688", # Teal
+    "17. Paisagismo e Urbanização": "#388E3C", # Verde Escuro
+    "18. Limpeza Final e Desmobilização": "#BDBDBD", # Cinza Claro
+    "19. Taxas, Licenças e Administrativo": "#673AB7"  # Roxo Escuro
+}
+
+# ==========================================
+# MOTOR DE TABELAS PDF
 # ==========================================
 def gerar_tabela_pdf(pdf, df, col_widths, col_names, base_x=10, orient="P", max_y=275):
     def imprimir_cabecalho():
@@ -47,7 +72,6 @@ def gerar_tabela_pdf(pdf, df, col_widths, col_names, base_x=10, orient="P", max_
         line_height = 5
         row_height = max_lines * line_height
         
-        # O limite da página usa o max_y passado no argumento para suportar A3 e A4
         if pdf.get_y() + row_height > max_y:
             pdf.add_page(orientation=orient)
             pdf.set_y(15)
@@ -73,18 +97,7 @@ def gerar_tabela_pdf(pdf, df, col_widths, col_names, base_x=10, orient="P", max_
         fill = not fill
 
 # --- LISTAS E FUNÇÕES DO CPM ---
-FASES_DA_OBRA = [
-    "1. Serviços Preliminares e Projetos", "2. Canteiro de Obras e Locação",
-    "3. Movimento de Terra (Terraplenagem)", "4. Fundações e Contenções",
-    "5. Superestrutura (Concreto/Aço/Madeira)", "6. Alvenaria e Paredes de Vedação",
-    "7. Coberturas e Impermeabilizações", "8. Esquadrias, Portas e Janelas",
-    "9. Instalações Hidrossanitárias e Gás", "10. Instalações Elétricas, Lógicas e SPDA",
-    "11. Instalações de Combate a Incêndio", "12. Instalações Especiais e Climatização",
-    "13. Revestimentos Internos e Externos", "14. Pisos e Rodapés",
-    "15. Forros e Pinturas", "16. Louças, Metais e Acessórios",
-    "17. Paisagismo e Urbanização", "18. Limpeza Final e Desmobilização",
-    "19. Taxas, Licenças e Administrativo"
-]
+FASES_DA_OBRA = list(CORES_FASES.keys())
 
 def add_bus_days(start_date, days):
     if days == 0: return start_date
@@ -221,7 +234,7 @@ if not df_tarefas.empty:
 
 aba1, aba2, aba3, aba4, aba5, aba6, aba7 = st.tabs(["📊 Gantt & EAP", "📈 Curva S (Medição)", "💸 Financeiro", "🛒 Insumos (Curva ABC)", "📖 RDO", "💰 SINAPI", "⚙️ Planejar"])
 
-# --- ABA 1: GANTT, ATUALIZAÇÃO, TABELA EAP E PDF ---
+# --- ABA 1: GANTT E PDF ---
 with aba1:
     col_met1, col_met2, col_btn = st.columns([2, 2, 1])
     df_top_level = df_tarefas[df_tarefas['parent_id'].isna()]
@@ -233,7 +246,7 @@ with aba1:
     if col_btn.button("🔄 Recalcular CPM", type="primary", use_container_width=True):
         rodar_motor_cpm(conn, int(obra_ativa_id)); st.rerun()
         
-    with st.expander("📝 Atualizar Progresso ou Ajustar Prazos (Atrasos/Antecipações)", expanded=False):
+    with st.expander("📝 Atualizar Progresso ou Ajustar Prazos", expanded=False):
         t_edit = df_tarefas[df_tarefas['parent_id'].notna() | (df_tarefas['parent_id'].isna() & df_tarefas['dependencia_id'].notna())]
         if not t_edit.empty:
             t_id = st.selectbox("Selecione o Serviço:", t_edit['id'], format_func=lambda x: t_edit[t_edit['id']==x]['nome_servico'].values[0])
@@ -241,7 +254,7 @@ with aba1:
             c_perc, c_data = st.columns(2)
             n_perc = c_perc.slider("Conclusão (%)", 0, 100, int(t_row['conclusao_percentual']))
             n_data = c_data.date_input("Nova Data de Término", value=t_row['data_fim'])
-            if st.button("💾 Salvar Atualização e Recalcular", type="secondary"):
+            if st.button("💾 Salvar Atualização", type="secondary"):
                 with conn.session as s:
                     s.execute(text("UPDATE tarefas SET conclusao_percentual = :p, data_fim = :df WHERE id = :id"), {"p": n_perc, "df": n_data, "id": int(t_id)})
                     s.commit()
@@ -252,23 +265,48 @@ with aba1:
         df_tarefas['data_inicio'] = pd.to_datetime(df_tarefas['data_inicio']).dt.date
         df_tarefas['data_fim'] = pd.to_datetime(df_tarefas['data_fim']).dt.date
         
-        fig = px.timeline(df_tarefas, x_start="data_inicio", x_end="data_fim", y="nome_servico", color="fase", title="Evolução Lógica")
-        fig.update_yaxes(autorange="reversed"); fig.update_layout(height=400, margin=dict(l=0, r=0, t=30, b=0))
+        # --- GRÁFICO INTERATIVO NO APP (MUITO MAIOR E COM LINHAS SEMANAIS) ---
+        altura_app = max(400, len(df_tarefas) * 35) # Cresce dinamicamente!
+        fig = px.timeline(df_tarefas, x_start="data_inicio", x_end="data_fim", y="nome_servico", color="fase", color_discrete_map=CORES_FASES, title="Evolução Lógica")
+        fig.update_yaxes(autorange="reversed")
+        
+        # Cria as linhas verticais a cada semana (604800000 milissegundos = 7 dias)
+        fig.update_layout(
+            height=altura_app, 
+            margin=dict(l=0, r=0, t=30, b=0),
+            xaxis=dict(
+                dtick=604800000, 
+                tickformat="%d/%m\n%Y", 
+                showgrid=True, 
+                gridcolor='rgba(128, 128, 128, 0.4)',
+                gridwidth=1
+            )
+        )
         st.plotly_chart(fig, use_container_width=True)
         
-        # TABELA EAP
         st.subheader("📋 Estrutura Analítica (EAP)")
         df_exib_rows = []
+        
+        # Aqui ordenamos as fases na Tabela EAP (e logo no PDF)
         fases_presentes = sorted(df_tarefas['fase'].unique(), key=lambda x: FASES_DA_OBRA.index(x) if x in FASES_DA_OBRA else 999)
+        
+        # Criação da ordem lógica de exibição para o eixo Y do Gráfico PDF
+        ordem_exibicao_grafico = [] 
         
         for fase in fases_presentes:
             df_fase = df_tarefas[df_tarefas['fase'] == fase]
+            
+            # Sub-tarefas
             for _, row in df_fase.iterrows():
+                nome_formatado = ("  ↳ " if pd.notna(row['parent_id']) else "📦 ") + row['nome_servico']
                 df_exib_rows.append({
-                    "id": row['id'], "Serviço": ("  ↳ " if pd.notna(row['parent_id']) else "📦 ") + row['nome_servico'],
+                    "id": row['id'], "Serviço": nome_formatado,
                     "Início": pd.to_datetime(row['data_inicio']).strftime('%d/%m/%Y'), "Fim": pd.to_datetime(row['data_fim']).strftime('%d/%m/%Y'),
                     "Conc. %": row['conclusao_percentual'], "Custo (R$)": row['custo_previsto'], "Venda (R$)": float(row['custo_previsto']) * (1 + (taxa_bdi/100))
                 })
+                # Guarda a ordem invertida para o Matplotlib desenhar de cima para baixo
+                ordem_exibicao_grafico.insert(0, {'nome': row['nome_servico'], 'inicio': pd.to_datetime(row['data_inicio']), 'fim': pd.to_datetime(row['data_fim']), 'fase': row['fase']})
+                
             t_custo = df_fase[df_fase['parent_id'].isna()]['custo_previsto'].sum()
             df_exib_rows.append({"id": None, "Serviço": f"➤ SUBTOTAL: {fase.upper()}", "Início": "", "Fim": "", "Conc. %": None, "Custo (R$)": t_custo, "Venda (R$)": t_custo * (1 + (taxa_bdi/100))})
             
@@ -276,9 +314,6 @@ with aba1:
         df_exib = pd.DataFrame(df_exib_rows)
         st.dataframe(df_exib, column_config={"id": None, "Custo (R$)": st.column_config.NumberColumn(format="R$ %.2f"), "Venda (R$)": st.column_config.NumberColumn(format="R$ %.2f")}, hide_index=True, use_container_width=True)
 
-        # ==========================================
-        # GERAÇÃO DO PDF HÍBRIDO EM A3 (EXCLUSIVO ABA 1)
-        # ==========================================
         st.divider()
         st.write("📄 **Exportar Cronogramas Oficiais (A3 Alta Resolução)**")
         c_pdf1, c_pdf2 = st.columns(2)
@@ -288,23 +323,39 @@ with aba1:
             with st.spinner("Desenhando gráficos e estruturando as páginas em formato A3..."):
                 import matplotlib.pyplot as plt
                 import matplotlib.dates as mdates
+                import matplotlib.patches as mpatches
                 
-                # Gráfico Elástico para acomodar todas as tarefas
-                altura_grafico = max(5, len(df_tarefas) * 0.25)
-                # Formato A3 exige uma resolução mais comprida na imagem
-                fig_pdf, ax = plt.subplots(figsize=(16, altura_grafico), dpi=150)
-                df_grafico = df_tarefas.copy().sort_values(by='data_inicio', ascending=False)
-                for idx, row in df_grafico.iterrows():
-                    ax.barh(row['nome_servico'], mdates.date2num(row['data_fim']) - mdates.date2num(row['data_inicio']), left=mdates.date2num(row['data_inicio']), color="#b0bec5", edgecolor='black')
-                ax.xaxis_date(); ax.xaxis.set_major_formatter(mdates.DateFormatter('%d/%m/%Y'))
-                plt.xticks(rotation=45, ha='right', fontsize=8); plt.yticks(fontsize=8); plt.tight_layout()
+                df_graf_ordenado = pd.DataFrame(ordem_exibicao_grafico)
+                
+                altura_grafico = max(6, len(df_tarefas) * 0.35)
+                # Mais espaço para legenda (figsize largura 20)
+                fig_pdf, ax = plt.subplots(figsize=(20, altura_grafico), dpi=150)
+                
+                # Desenha as barras com CORES!
+                for idx, row in df_graf_ordenado.iterrows():
+                    cor_barra = CORES_FASES.get(row['fase'], "#b0bec5")
+                    ax.barh(row['nome'], mdates.date2num(row['fim']) - mdates.date2num(row['inicio']), left=mdates.date2num(row['inicio']), color=cor_barra, edgecolor='black', linewidth=0.5)
+                
+                # Linhas Guia Semanais no Eixo X
+                ax.xaxis.set_major_locator(mdates.WeekdayLocator(byweekday=mdates.MO)) # Linha toda Segunda-feira
+                ax.xaxis.set_major_formatter(mdates.DateFormatter('%d/%m/%Y'))
+                ax.grid(axis='x', color='gray', linestyle='--', linewidth=0.5, alpha=0.7)
+                
+                plt.xticks(rotation=45, ha='right', fontsize=9); plt.yticks(fontsize=9)
+                
+                # CRIA A LEGENDA
+                fases_unicas = df_graf_ordenado['fase'].unique()
+                patches = [mpatches.Patch(color=CORES_FASES.get(f, "#b0bec5"), label=f) for f in fases_unicas]
+                # Posiciona a legenda à direita fora do gráfico
+                ax.legend(handles=patches, bbox_to_anchor=(1.02, 1), loc='upper left', fontsize=8, title="Fases (EAP)")
+                
+                plt.tight_layout()
                 caminho_img = "gantt_temp.png"
                 plt.savefig(caminho_img); plt.close(fig_pdf)
 
-                # Inicializa o PDF no formato A3!
                 pdf = FPDF(unit="mm", format="A3")
                 
-                # --- PÁGINA 1: GANTT (A3 PAISAGEM = 420mm de largura) ---
+                # PÁGINA 1: GANTT (A3 PAISAGEM)
                 pdf.add_page(orientation="L")
                 pdf.set_font("Arial", "B", 18)
                 pdf.set_fill_color(41, 128, 185); pdf.set_text_color(255, 255, 255)
@@ -314,9 +365,9 @@ with aba1:
                 pdf.set_font("Arial", "B", 14); pdf.set_text_color(40, 40, 40)
                 titulo_valor = f"Custo Estimado: R$ {custo_total:,.2f}" if tipo_pdf == "interno" else f"Preco Total da Obra: R$ {preco_venda:,.2f}"
                 pdf.cell(400, 10, remover_acentos(titulo_valor.replace(",", "X").replace(".", ",").replace("X", ".")), ln=True, align="C")
-                pdf.image(caminho_img, x=10, w=400); pdf.ln(5)
+                pdf.image(caminho_img, x=5, w=410); pdf.ln(5) # Gráfico esticado ao máximo
                 
-                # --- PÁGINAS SEGUINTES: TABELA EAP (A3 RETRATO = 297mm de largura x 420mm de altura) ---
+                # PÁGINAS 2+: TABELA EAP (A3 RETRATO)
                 pdf.add_page(orientation="P")
                 pdf.set_font("Arial", "B", 16); pdf.set_text_color(40, 40, 40)
                 pdf.cell(277, 10, "Estrutura Analitica do Projeto (EAP)", ln=True, align="C")
@@ -334,10 +385,7 @@ with aba1:
                     
                 df_pdf_eap['Conc. %'] = df_pdf_eap['Conc. %'].apply(lambda x: f"{int(x)}%" if pd.notna(x) else "")
                 
-                # Larguras gigantes para cobrir o A3 Retrato (Soma = 277mm)
                 col_widths = [145, 30, 30, 22, 50]
-                
-                # A folha A3 Retrato tem 420mm de altura, o limite max_y seguro é 390
                 gerar_tabela_pdf(pdf, df_pdf_eap, col_widths, col_names, base_x=10, orient="P", max_y=390)
                 
                 pdf.output("relatorio_gantt.pdf")
