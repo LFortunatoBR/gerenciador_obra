@@ -87,7 +87,7 @@ with aba1:
         st.subheader("📄 Exportar Relatório")
         
         if st.button("⚙️ Processar Relatório em PDF"):
-            with st.spinner("Desenhando gráfico e formatando folha A4... (pode levar alguns segundos)"):
+            with st.spinner("Formatando folha A4 e dados financeiros..."):
                 pdf = FPDF(orientation="P", unit="mm", format="A4")
                 pdf.add_page()
                 
@@ -98,13 +98,7 @@ with aba1:
                 pdf.set_font("Arial", "", 12)
                 texto_custo = f"Custo Total Previsto: R$ {custo_total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
                 pdf.cell(190, 10, remover_acentos(texto_custo), ln=True, align="C")
-                pdf.ln(5)
-                
-                # Salva o Gráfico como Imagem e insere no PDF
-                caminho_imagem = "grafico_temp.png"
-                fig.write_image(caminho_imagem, engine="kaleido", width=900, height=450)
-                pdf.image(caminho_imagem, x=10, w=190)
-                pdf.ln(5)
+                pdf.ln(10) # Pula uma linha dupla para respirar
                 
                 # Cabeçalho da Tabela no PDF
                 pdf.set_font("Arial", "B", 9)
@@ -118,10 +112,10 @@ with aba1:
                 pdf.set_font("Arial", "", 8)
                 for index, row in df_exibicao.iterrows():
                     # Corta o nome se for muito longo para não quebrar a tabela
-                    serv = remover_acentos(row['Serviço'])[:35]
+                    serv = remover_acentos(str(row['Serviço']))[:35]
                     ini = str(row['Início'])
                     fim = str(row['Término'])
-                    custo = remover_acentos(row['Custo Previsto'])
+                    custo = remover_acentos(str(row['Custo Previsto']))
                     conc = str(row['Conclusão (%)'])
                     if conc != "-":
                         conc = f"{conc}%"
