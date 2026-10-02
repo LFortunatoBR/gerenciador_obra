@@ -52,6 +52,34 @@ with aba1:
         custo_total = df_tarefas['custo_previsto'].sum()
         st.metric(label="Custo Total Previsto da Obra", value=f"R$ {custo_total:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
         
+        # ==========================================
+        # NOVO PAINEL: ATUALIZAR PERCENTAGEM
+        # ==========================================
+        with st.expander("📈 Atualizar Avanço das Tarefas"):
+            st.write("Selecione um serviço para atualizar a percentagem de conclusão real da obra:")
+            col_sel, col_sld, col_btn = st.columns([2, 2, 1])
+            
+            with col_sel:
+                # Cria um dicionário para ligar o ID da tarefa ao Nome visualmente
+                tarefas_dict = dict(zip(df_tarefas['id'], df_tarefas['nome_servico']))
+                id_selecionado = st.selectbox("Serviço", options=list(tarefas_dict.keys()), format_func=lambda x: tarefas_dict[x])
+            
+            with col_sld:
+                perc_atual = int(df_tarefas[df_tarefas['id'] == id_selecionado]['conclusao_percentual'].values[0])
+                novo_perc = st.slider("Conclusão (%)", 0, 100, perc_atual, key="slider_perc")
+            
+            with col_btn:
+                st.write("") # Espaçamento para alinhar com o formulário
+                st.write("")
+                if st.button("Gravar Alteração"):
+                    with conn.session as s:
+                        s.execute(text("UPDATE tarefas SET conclusao_percentual = :perc WHERE id = :id"), {"perc": novo_perc, "id": int(id_selecionado)})
+                        s.commit()
+                    st.success("Atualizado!")
+                    st.rerun()
+        # ==========================================
+
+        # Converte as datas para o gráfico funcionar (mantenha o seu código restante abaixo disto)
         df_tarefas['data_inicio'] = pd.to_datetime(df_tarefas['data_inicio'])
         df_tarefas['data_fim'] = pd.to_datetime(df_tarefas['data_fim'])
         
