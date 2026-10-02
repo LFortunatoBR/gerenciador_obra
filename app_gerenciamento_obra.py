@@ -2,6 +2,13 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 from sqlalchemy import text
+import unicodedata
+from fpdf import FPDF
+import os
+
+# Função para evitar erros de acentos no PDF
+def remover_acentos(texto):
+    return ''.join(c for c in unicodedata.normalize('NFD', str(texto)) if unicodedata.category(c) != 'Mn')
 
 st.set_page_config(page_title="Gestor de Obras", page_icon="🏗️", layout="centered")
 
@@ -37,7 +44,7 @@ st.title("🏗️ Planejador de Obras Integrado")
 
 aba1, aba2, aba3 = st.tabs(["📊 Cronograma", "💰 Orçamento (SINAPI)", "⚙️ Gerenciar Tarefas"])
 
-# --- ABA 1: CRONOGRAMA E RESUMO FINANCEIRO ---
+# --- ABA 1: CRONOGRAMA, TABELA E EXPORTAÇÃO PDF ---
 with aba1:
     df_tarefas = conn.query("SELECT * FROM tarefas ORDER BY data_inicio;", ttl=0)
     
@@ -45,7 +52,6 @@ with aba1:
         custo_total = df_tarefas['custo_previsto'].sum()
         st.metric(label="Custo Total Previsto da Obra", value=f"R$ {custo_total:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
         
-        # Converte as datas para o gráfico funcionar
         df_tarefas['data_inicio'] = pd.to_datetime(df_tarefas['data_inicio'])
         df_tarefas['data_fim'] = pd.to_datetime(df_tarefas['data_fim'])
         
@@ -58,37 +64,89 @@ with aba1:
         st.plotly_chart(fig, use_container_width=True)
         
         # --- Formatação da Tabela para Exibição ---
-        # 1. Cria uma cópia com os nomes das colunas mais limpos
         df_exibicao = df_tarefas[["nome_servico", "fase", "data_inicio", "data_fim", "custo_previsto", "conclusao_percentual"]].copy()
         df_exibicao.columns = ["Serviço", "Fase", "Início", "Término", "Custo Previsto", "Conclusão (%)"]
         
-        # 2. Formata as datas para o padrão brasileiro (DD/MM/AAAA)
         df_exibicao['Início'] = df_exibicao['Início'].dt.strftime('%d/%m/%Y')
         df_exibicao['Término'] = df_exibicao['Término'].dt.strftime('%d/%m/%Y')
         
-        # 3. Adiciona a linha de TOTAL no final
-        nova_linha_total = pd.DataFrame([{
-            "Serviço": "TOTAL DA OBRA", 
-            "Fase": "-", 
-            "Início": "-", 
-            "Término": "-", 
-            "Custo Previsto": custo_total, 
-            "Conclusão (%)": "-"
-        }])
+        nova_linha_total = pd.DataFrame([{"Serviço": "TOTAL DA OBRA", "Fase": "-", "Início": "-", "Término": "-", "Custo Previsto": custo_total, "Conclusão (%)": "-"}])
         df_exibicao = pd.concat([df_exibicao, nova_linha_total], ignore_index=True)
         
-        # 4. Formata a coluna de custo com o R$, ponto de milhar e vírgula decimal
         def formatar_moeda(valor):
             try:
-                # Formata com 2 casas decimais e separador de milhar americano, depois inverte ponto e vírgula
                 return f"R$ {float(valor):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
             except:
                 return valor
 
         df_exibicao['Custo Previsto'] = df_exibicao['Custo Previsto'].apply(formatar_moeda)
-        
-        # 5. Exibe a tabela bonitona
         st.dataframe(df_exibicao, hide_index=True, use_container_width=True)
+        
+        # --- GERADOR DE PDF A4 ---
+        st.divider()
+        st.subheader("📄 Exportar Relatório")
+        
+        if st.button("⚙️ Processar Relatório em PDF"):
+            with st.spinner("Desenhando gráfico e formatando folha A4... (pode levar alguns segundos)"):
+                pdf = FPDF(orientation="P", unit="mm", format="A4")
+                pdf.add_page()
+                
+                # Título e Custo Total
+                pdf.set_font("Arial", "B", 16)
+                pdf.cell(190, 10, remover_acentos("Relatorio de Cronograma e Orcamento da Obra"), ln=True, align="C")
+                
+                pdf.set_font("Arial", "", 12)
+                texto_custo = f"Custo Total Previsto: R$ {custo_total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                pdf.cell(190, 10, remover_acentos(texto_custo), ln=True, align="C")
+                pdf.ln(5)
+                
+                # Salva o Gráfico como Imagem e insere no PDF
+                caminho_imagem = "grafico_temp.png"
+                fig.write_image(caminho_imagem, engine="kaleido", width=900, height=450)
+                pdf.image(caminho_imagem, x=10, w=190)
+                pdf.ln(5)
+                
+                # Cabeçalho da Tabela no PDF
+                pdf.set_font("Arial", "B", 9)
+                pdf.cell(70, 8, "Servico", 1)
+                pdf.cell(25, 8, "Inicio", 1)
+                pdf.cell(25, 8, "Termino", 1)
+                pdf.cell(40, 8, "Custo Previsto", 1)
+                pdf.cell(30, 8, "Conclusao", 1, ln=True)
+                
+                # Linhas da Tabela
+                pdf.set_font("Arial", "", 8)
+                for index, row in df_exibicao.iterrows():
+                    # Corta o nome se for muito longo para não quebrar a tabela
+                    serv = remover_acentos(row['Serviço'])[:35]
+                    ini = str(row['Início'])
+                    fim = str(row['Término'])
+                    custo = remover_acentos(row['Custo Previsto'])
+                    conc = str(row['Conclusão (%)'])
+                    if conc != "-":
+                        conc = f"{conc}%"
+                    
+                    pdf.cell(70, 8, serv, 1)
+                    pdf.cell(25, 8, ini, 1)
+                    pdf.cell(25, 8, fim, 1)
+                    pdf.cell(40, 8, custo, 1)
+                    pdf.cell(30, 8, conc, 1, ln=True)
+                
+                # Salva o PDF na memória do servidor
+                pdf.output("relatorio_obra.pdf")
+                with open("relatorio_obra.pdf", "rb") as f:
+                    st.session_state['pdf_pronto'] = f.read()
+
+        # Mostra o botão de download se o PDF estiver pronto na memória
+        if 'pdf_pronto' in st.session_state:
+            st.success("Relatório gerado com sucesso!")
+            st.download_button(
+                label="⬇️ Baixar PDF A4",
+                data=st.session_state['pdf_pronto'],
+                file_name="Cronograma_Gestor_Obras.pdf",
+                mime="application/pdf"
+            )
+            
     else:
         st.info("Nenhuma tarefa cadastrada.")
 
