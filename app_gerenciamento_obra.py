@@ -11,17 +11,15 @@ import pytz
 
 def remover_acentos(texto):
     if pd.isna(texto): return ""
-    # Traduz os emojis/ícones visuais para texto simples aceito pelo PDF (latin-1)
     texto = str(texto).replace("📦 ", "").replace("↳", "->").replace("➤", ">>").replace("⭐", "***")
-    # Remove acentos tradicionais
     s = ''.join(c for c in unicodedata.normalize('NFD', texto) if unicodedata.category(c) != 'Mn')
-    # Força a codificação segura ignorando qualquer outro caractere especial perdido
     return s.encode('latin1', 'ignore').decode('latin1')
 
 # ==========================================
-# MOTOR DE TABELAS PDF (LINHAS AUTOMÁTICAS E CORES)
+# MOTOR DE TABELAS PDF (CÁLCULO EXATO DE QUEBRA DE LINHAS)
 # ==========================================
 def gerar_tabela_pdf(pdf, df, col_widths, col_names, base_x=10):
+    # Cabeçalho da Tabela
     pdf.set_fill_color(41, 128, 185)
     pdf.set_text_color(255, 255, 255)
     pdf.set_font("Arial", 'B', 9)
@@ -30,25 +28,35 @@ def gerar_tabela_pdf(pdf, df, col_widths, col_names, base_x=10):
         pdf.cell(w, 8, remover_acentos(name), border=0, fill=True, align='C')
     pdf.ln(8)
     
+    # Corpo da Tabela
     pdf.set_text_color(40, 40, 40)
     pdf.set_font("Arial", '', 8)
     fill = False
     
     for idx, row in df.iterrows():
         row_data = [remover_acentos(str(x)) for x in row.values]
+        
+        # CÁLCULO CORRIGIDO: Descobre a altura real da linha mais gorda
         max_lines = 1
         for text, w in zip(row_data, col_widths):
+            # Obtém a largura total da string em milímetros
             width_text = pdf.get_string_width(text)
-            lines = int(width_text / (w - 4)) + 1
-            if lines > max_lines: max_lines = lines
+            # Se o texto for maior que a largura da coluna (com folga de 2mm), ele quebra de linha
+            if width_text > (w - 2):
+                lines = int(width_text / (w - 2)) + 1
+                if lines > max_lines: 
+                    max_lines = lines
         
         line_height = 5
         row_height = max_lines * line_height
         
+        # Se não couber na página, cria uma nova
         if pdf.get_y() + row_height > 275:
             pdf.add_page(); pdf.set_y(20) 
             
         y_start = pdf.get_y()
+        
+        # Fundo Zebrado
         if fill:
             pdf.set_fill_color(240, 245, 250)
             pdf.rect(base_x, y_start, sum(col_widths), row_height, 'F')
@@ -56,9 +64,11 @@ def gerar_tabela_pdf(pdf, df, col_widths, col_names, base_x=10):
         x_curr = base_x
         for text, w in zip(row_data, col_widths):
             pdf.set_xy(x_curr, y_start)
+            # multi_cell faz a quebra automática dentro da célula
             pdf.multi_cell(w, line_height, text, border=0, align='C')
             x_curr += w
         
+        # Força o cursor (Y) a pular a altura exata do texto maior antes de desenhar a linha divisória
         pdf.set_draw_color(200, 200, 200)
         pdf.line(base_x, y_start + row_height, base_x + sum(col_widths), y_start + row_height)
         pdf.set_xy(base_x, y_start + row_height)
@@ -276,7 +286,9 @@ with aba1:
             with st.spinner("Desenhando gráfico e processando PDF..."):
                 import matplotlib.pyplot as plt
                 import matplotlib.dates as mdates
-                fig_pdf, ax = plt.subplots(figsize=(10, 4), dpi=150)
+                # O gráfico cresce dinamicamente: 0.25 polegadas por cada tarefa existente
+                altura_grafico = max(4, len(df_grafico) * 0.25)
+                fig_pdf, ax = plt.subplots(figsize=(10, altura_grafico), dpi=150)
                 df_grafico = df_tarefas.copy().sort_values(by='data_inicio', ascending=False)
                 for idx, row in df_grafico.iterrows():
                     ax.barh(row['nome_servico'], mdates.date2num(row['data_fim']) - mdates.date2num(row['data_inicio']), left=mdates.date2num(row['data_inicio']), color="#b0bec5", edgecolor='black')
