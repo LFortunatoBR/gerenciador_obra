@@ -360,30 +360,56 @@ with aba3:
             des_pago = df_fin[(df_fin['tipo']=='Despesa') & (df_fin['status']=='Pago')]['valor'].sum()
             st.metric("Saldo Real em Caixa (Recebido - Pago)", f"R$ {rec_pago - des_pago:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
 
-# --- ABA 4: CURVA ABC (INSUMOS) ---
+# ==========================================
+# ABA 4: AGENDA DE COMPRAS E CURVA ABC
+# ==========================================
 with aba4:
-    st.header("🛒 Lista de Compras (Curva ABC)")
-    st.write("Cruza as quantidades do seu projeto com a tabela analítica do SINAPI.")
+    st.header("🛒 Agenda de Compras e Contratos (Curva ABC)")
+    st.write("Foco na negociação: descubra quais pacotes de serviço representam o maior volume financeiro da sua obra.")
     
-    df_abc = conn.query("""
-        SELECT a.codigo_insumo as "Código", a.descricao_insumo as "Insumo", a.unidade as "Unid.", 
-               SUM(a.quantidade * t.quantidade_sinapi) as "Qtd Necessária",
-               a.preco_unitario as "Preço Unit. (R$)",
-               SUM(a.quantidade * t.quantidade_sinapi * a.preco_unitario) as "Custo Total (R$)"
-        FROM tarefas t
-        JOIN sinapi_analitico a ON t.codigo_sinapi = a.codigo_composicao
-        WHERE t.obra_id = :oid AND t.codigo_sinapi IS NOT NULL
-        GROUP BY a.codigo_insumo, a.descricao_insumo, a.unidade, a.preco_unitario
-        ORDER BY "Custo Total (R$)" DESC
-    """, params={"oid": int(obra_ativa_id)}, ttl=0)
-    
-    if not df_abc.empty:
-        st.dataframe(df_abc, column_config={"Qtd Necessária": st.column_config.NumberColumn(format="%.2f"), "Preço Unit. (R$)": st.column_config.NumberColumn(format="R$ %.2f"), "Custo Total (R$)": st.column_config.NumberColumn(format="R$ %.2f")}, hide_index=True, use_container_width=True)
+    if not df_tarefas.empty:
+        # Agrupa os dados pegando apenas as tarefas raiz (para não haver dupla contagem financeira)
+        df_abc = df_tarefas[df_tarefas['parent_id'].isna()].copy()
+        
+        if not df_abc.empty:
+            df_abc = df_abc[['fase', 'nome_servico', 'data_inicio', 'custo_previsto']]
+            df_abc.columns = ['Fase', 'Pacote de Compra / Serviço', 'Data Limite (Início)', 'Custo Total (Verba)']
+            
+            # Ordena do serviço mais caro para o mais barato (Lógica Curva ABC)
+            df_abc = df_abc.sort_values(by='Custo Total (Verba)', ascending=False)
+            
+            # Cálculos de Porcentagem e Acumulado
+            total_obra_abc = df_abc['Custo Total (Verba)'].sum()
+            df_abc['% do Total'] = (df_abc['Custo Total (Verba)'] / total_obra_abc) * 100
+            df_abc['% Acumulado'] = df_abc['% do Total'].cumsum()
+            
+            st.dataframe(
+                df_abc, 
+                column_config={
+                    "Data Limite (Início)": st.column_config.DateColumn(format="DD/MM/YYYY"),
+                    "Custo Total (Verba)": st.column_config.NumberColumn(format="R$ %.2f"),
+                    "% do Total": st.column_config.NumberColumn(format="%.1f%%"),
+                    "% Acumulado": st.column_config.NumberColumn(format="%.1f%%")
+                }, 
+                hide_index=True, 
+                use_container_width=True
+            )
+            
+            # Gráfico Profissional de Pareto
+            fig_abc = go.Figure()
+            fig_abc.add_trace(go.Bar(x=df_abc['Pacote de Compra / Serviço'], y=df_abc['Custo Total (Verba)'], name="Custo (R$)", marker_color='#4fc3f7'))
+            fig_abc.add_trace(go.Scatter(x=df_abc['Pacote de Compra / Serviço'], y=df_abc['% Acumulado'], mode='lines+markers', name="% Acumulado", yaxis='y2', line=dict(color='red', width=3)))
+            
+            fig_abc.update_layout(
+                title="Gráfico de Pareto (Quais serviços consomem seu orçamento?)",
+                yaxis=dict(title="Custo (R$)"),
+                yaxis2=dict(title="% Acumulado", overlaying='y', side='right', range=[0, 110]),
+                xaxis=dict(tickangle=-45),
+                margin=dict(b=0)
+            )
+            st.plotly_chart(fig_abc, use_container_width=True)
     else:
-        st.info("💡 A Tabela Analítica do SINAPI ainda não foi carregada no banco ou você não inseriu tarefas pelo SINAPI. Abaixo segue a lista por Macro-etapa:")
-        df_compras = df_tarefas[df_tarefas['parent_id'].isna()][['nome_servico', 'data_inicio', 'custo_previsto']].copy()
-        df_compras.columns = ['Pacote de Compra', 'Data Limite', 'Verba']
-        st.dataframe(df_compras.sort_values(by='Data Limite'), hide_index=True, use_container_width=True)
+        st.info("💡 Adicione tarefas e serviços na aba 'Planejar' para que o sistema construa a sua pauta de compras.")
 
 # --- ABA 5: RDO ---
 with aba5:
