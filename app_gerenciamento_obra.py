@@ -82,12 +82,49 @@ with aba1:
         df_exibicao['Custo Previsto'] = df_exibicao['Custo Previsto'].apply(formatar_moeda)
         st.dataframe(df_exibicao, hide_index=True, use_container_width=True)
         
-        # --- GERADOR DE PDF A4 ---
+        # --- GERADOR DE PDF A4 (COM GRÁFICO SEGURO) ---
         st.divider()
-        st.subheader("📄 Exportar Relatório")
+        st.subheader("📄 Exportar Relatório Completo")
         
         if st.button("⚙️ Processar Relatório em PDF"):
-            with st.spinner("Formatando folha A4 e dados financeiros..."):
+            with st.spinner("Desenhando gráfico e formatando folha A4..."):
+                import matplotlib.pyplot as plt
+                import matplotlib.dates as mdates
+                import numpy as np
+
+                # 1. GERAR A IMAGEM DO GRÁFICO DE GANTT (VIA MATPLOTLIB)
+                # Cria uma figura limpa e de alta resolução
+                fig_pdf, ax = plt.subplots(figsize=(10, 4), dpi=150)
+                
+                # Inverte a ordem para a primeira tarefa ficar no topo
+                df_grafico = df_tarefas.copy().sort_values(by='data_inicio', ascending=False)
+                
+                # Cores baseadas nas fases para ficar bonito no PDF
+                cores_fases = {"Projetos": "#90caf9", "Preparação": "#1976d2", "Administrativo": "#eeeeee",
+                               "Infraestrutura": "#ffcc80", "Superestrutura": "#ff9800", 
+                               "Instalações": "#a5d6a7", "Acabamento": "#4caf50"}
+                
+                for idx, row in df_grafico.iterrows():
+                    fase = str(row['fase'])
+                    cor = cores_fases.get(fase, "#9e9e9e")
+                    inicio = mdates.date2num(row['data_inicio'])
+                    fim = mdates.date2num(row['data_fim'])
+                    ax.barh(row['nome_servico'], fim - inicio, left=inicio, color=cor, edgecolor='black', alpha=0.8)
+
+                # Formatação do eixo X (Datas)
+                ax.xaxis_date()
+                ax.xaxis.set_major_formatter(mdates.DateFormatter('%d/%m/%Y'))
+                plt.xticks(rotation=45, ha='right', fontsize=8)
+                plt.yticks(fontsize=8)
+                plt.title("Cronograma Fisico da Obra", fontsize=12, pad=10)
+                plt.tight_layout()
+                
+                # Salva o gráfico como imagem PNG temporária
+                caminho_imagem = "grafico_gantt_temp.png"
+                plt.savefig(caminho_imagem)
+                plt.close(fig_pdf) # Fecha a figura para economizar memória
+
+                # 2. MONTAR A FOLHA A4 (COM A IMAGEM E A TABELA)
                 pdf = FPDF(orientation="P", unit="mm", format="A4")
                 pdf.add_page()
                 
@@ -98,7 +135,11 @@ with aba1:
                 pdf.set_font("Arial", "", 12)
                 texto_custo = f"Custo Total Previsto: R$ {custo_total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
                 pdf.cell(190, 10, remover_acentos(texto_custo), ln=True, align="C")
-                pdf.ln(10) # Pula uma linha dupla para respirar
+                pdf.ln(5)
+                
+                # Insere o Gráfico PNG no PDF
+                pdf.image(caminho_imagem, x=10, w=190)
+                pdf.ln(5) # Espaço entre o gráfico e a tabela
                 
                 # Cabeçalho da Tabela no PDF
                 pdf.set_font("Arial", "B", 9)
@@ -111,7 +152,6 @@ with aba1:
                 # Linhas da Tabela
                 pdf.set_font("Arial", "", 8)
                 for index, row in df_exibicao.iterrows():
-                    # Corta o nome se for muito longo para não quebrar a tabela
                     serv = remover_acentos(str(row['Serviço']))[:35]
                     ini = str(row['Início'])
                     fim = str(row['Término'])
@@ -126,14 +166,19 @@ with aba1:
                     pdf.cell(40, 8, custo, 1)
                     pdf.cell(30, 8, conc, 1, ln=True)
                 
-                # Salva o PDF na memória do servidor
+                # Salva o PDF na memória e exclui a imagem temporária
                 pdf.output("relatorio_obra.pdf")
                 with open("relatorio_obra.pdf", "rb") as f:
                     st.session_state['pdf_pronto'] = f.read()
+                
+                try:
+                    os.remove(caminho_imagem)
+                except:
+                    pass
 
-        # Mostra o botão de download se o PDF estiver pronto na memória
+        # Mostra o botão de download
         if 'pdf_pronto' in st.session_state:
-            st.success("Relatório gerado com sucesso!")
+            st.success("Relatório com gráfico gerado com sucesso!")
             st.download_button(
                 label="⬇️ Baixar PDF A4",
                 data=st.session_state['pdf_pronto'],
