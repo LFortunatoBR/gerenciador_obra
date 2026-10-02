@@ -14,49 +14,17 @@ def remover_acentos(texto):
 
 # --- LISTA OFICIAL DE MACRO-ETAPAS (PADRÃO SINAPI/EAP) ---
 FASES_DA_OBRA = [
-    "1. Serviços Preliminares e Projetos",
-    "2. Canteiro de Obras e Locação",
-    "3. Movimento de Terra (Terraplenagem)",
-    "4. Fundações e Contenções",
-    "5. Superestrutura (Concreto/Aço/Madeira)",
-    "6. Alvenaria e Paredes de Vedação",
-    "7. Coberturas e Impermeabilizações",
-    "8. Esquadrias, Portas e Janelas",
-    "9. Instalações Hidrossanitárias e Gás",
-    "10. Instalações Elétricas, Lógicas e SPDA",
-    "11. Instalações de Combate a Incêndio",
-    "12. Instalações Especiais e Climatização",
-    "13. Revestimentos Internos e Externos",
-    "14. Pisos e Rodapés",
-    "15. Forros e Pinturas",
-    "16. Louças, Metais e Acessórios",
-    "17. Paisagismo e Urbanização",
-    "18. Limpeza Final e Desmobilização",
+    "1. Serviços Preliminares e Projetos", "2. Canteiro de Obras e Locação",
+    "3. Movimento de Terra (Terraplenagem)", "4. Fundações e Contenções",
+    "5. Superestrutura (Concreto/Aço/Madeira)", "6. Alvenaria e Paredes de Vedação",
+    "7. Coberturas e Impermeabilizações", "8. Esquadrias, Portas e Janelas",
+    "9. Instalações Hidrossanitárias e Gás", "10. Instalações Elétricas, Lógicas e SPDA",
+    "11. Instalações de Combate a Incêndio", "12. Instalações Especiais e Climatização",
+    "13. Revestimentos Internos e Externos", "14. Pisos e Rodapés",
+    "15. Forros e Pinturas", "16. Louças, Metais e Acessórios",
+    "17. Paisagismo e Urbanização", "18. Limpeza Final e Desmobilização",
     "19. Taxas, Licenças e Administrativo"
 ]
-
-# --- PALETA DE CORES PARA O RELATÓRIO PDF ---
-CORES_FASES_PDF = {
-    "1. Serviços Preliminares e Projetos": "#cfd8dc",
-    "2. Canteiro de Obras e Locação": "#b0bec5",
-    "3. Movimento de Terra (Terraplenagem)": "#8d6e63",
-    "4. Fundações e Contenções": "#795548",
-    "5. Superestrutura (Concreto/Aço/Madeira)": "#ff9800",
-    "6. Alvenaria e Paredes de Vedação": "#ffcc80",
-    "7. Coberturas e Impermeabilizações": "#00bcd4",
-    "8. Esquadrias, Portas e Janelas": "#4dd0e1",
-    "9. Instalações Hidrossanitárias e Gás": "#4fc3f7",
-    "10. Instalações Elétricas, Lógicas e SPDA": "#fff176",
-    "11. Instalações de Combate a Incêndio": "#e57373",
-    "12. Instalações Especiais e Climatização": "#ba68c8",
-    "13. Revestimentos Internos e Externos": "#a5d6a7",
-    "14. Pisos e Rodapés": "#81c784",
-    "15. Forros e Pinturas": "#4caf50",
-    "16. Louças, Metais e Acessórios": "#f48fb1",
-    "17. Paisagismo e Urbanização": "#66bb6a",
-    "18. Limpeza Final e Desmobilização": "#e0e0e0",
-    "19. Taxas, Licenças e Administrativo": "#9e9e9e"
-}
 
 # --- FUNÇÕES DE ENGENHARIA (CALENDÁRIO DIAS ÚTEIS) ---
 def add_bus_days(start_date, days):
@@ -120,18 +88,18 @@ def rodar_motor_cpm(conn, obra_id):
                 if (t_dict[p_id]['data_inicio'] != min_ini or t_dict[p_id]['data_fim'] != max_fim or 
                     t_dict[p_id]['custo_previsto'] != sum_c or t_dict[p_id]['conclusao_percentual'] != int(sum_perc)):
                     t_dict[p_id]['data_inicio'], t_dict[p_id]['data_fim'] = min_ini, max_fim
-                    t_dict[p_id]['custo_previsto'], t_dict[p_id]['conclusao_percentual'] = sum_c, int(sum_perc)
+                    t_dict[p_id]['custo_previsto'], t_dict[p_id]['conclusao_percentual'] = float(sum_c), int(sum_perc)
                     mudou = True
 
         for t_id, t in t_dict.items():
             s.execute(text("UPDATE tarefas SET data_inicio=:i, data_fim=:f, custo_previsto=:c, conclusao_percentual=:p WHERE id=:id"), 
-                      {"i": t['data_inicio'], "f": t['data_fim'], "c": t['custo_previsto'], "p": t['conclusao_percentual'], "id": t_id})
+                      {"i": t['data_inicio'], "f": t['data_fim'], "c": float(t['custo_previsto'] or 0), "p": int(t['conclusao_percentual'] or 0), "id": t_id})
         s.commit()
 
 st.set_page_config(page_title="Gestor de Obras", page_icon="🏗️", layout="wide")
 
 # ==========================================
-# LOGIN & CONEXÃO
+# LOGIN & CONEXÃO (COM BLINDAGEM DE QUEDA)
 # ==========================================
 def check_password():
     if "autenticado" not in st.session_state: st.session_state["autenticado"] = False
@@ -146,7 +114,9 @@ def check_password():
 if not check_password(): st.stop()
 
 url_correta = st.secrets["DATABASE_URL"].replace("postgresql://", "postgresql+psycopg2://")
-conn = st.connection("postgresql", type="sql", url=url_correta)
+
+# CORREÇÃO CRÍTICA DO NEON: pool_pre_ping impede o OperationalError em conexões adormecidas!
+conn = st.connection("postgresql", type="sql", url=url_correta, pool_pre_ping=True, pool_recycle=300)
 
 # ==========================================
 # BARRA LATERAL (PROJETOS)
@@ -162,6 +132,13 @@ with st.sidebar:
         obra_ativa_id = st.selectbox("Projeto Ativo:", options=list(obras_dict.keys()), format_func=lambda x: obras_dict[x])
         
         with st.expander("⚙️ Gerenciar Projeto", expanded=False):
+            novo_nome = st.text_input("Renomear Projeto:", value=obras_dict[obra_ativa_id])
+            if st.button("💾 Salvar Nome"):
+                with conn.session as s:
+                    s.execute(text("UPDATE obras SET nome = :n WHERE id = :id"), {"n": novo_nome, "id": int(obra_ativa_id)})
+                    s.commit()
+                st.rerun()
+            st.divider()
             if st.button("🗑️ Excluir Projeto"):
                 with conn.session as s:
                     s.execute(text("DELETE FROM obras WHERE id = :id"), {"id": int(obra_ativa_id)})
@@ -221,8 +198,9 @@ with aba1:
         st.subheader("📋 Estrutura Analítica do Projeto (EAP)")
         
         df_exib_rows = []
-        # Ordena as fases extraídas para que apareçam na ordem correta da lista FASES_DA_OBRA
-        fases_presentes = [f for f in FASES_DA_OBRA if f in df_tarefas['fase'].unique()] 
+        
+        # CORREÇÃO DO MISTÉRIO DA FASE: Extrai todas as fases que o banco tem (incluindo as antigas não oficiais) e ordena as oficiais no topo!
+        fases_presentes = sorted(df_tarefas['fase'].unique(), key=lambda x: FASES_DA_OBRA.index(x) if x in FASES_DA_OBRA else 999)
         
         for fase in fases_presentes:
             df_fase = df_tarefas[df_tarefas['fase'] == fase]
@@ -330,7 +308,7 @@ with aba2:
                                 st.rerun()
 
 # ==========================================
-# ABA 3: PLANEJAR ETAPAS E KITS ÚNICA E CONSOLIDADA
+# ABA 3: PLANEJAR ETAPAS E KITS ÚNICA
 # ==========================================
 with aba3:
     st.subheader("⚙️ Planejamento Avançado")
@@ -374,7 +352,7 @@ with aba3:
                 {"nome": "Tubulação/Eletrodutos", "fase": "10. Instalações Elétricas, Lógicas e SPDA"}, 
                 {"nome": "Enfiação/Cabeamento", "fase": "10. Instalações Elétricas, Lógicas e SPDA"}, 
                 {"nome": "Fechamento (Tomadas/Interruptores)", "fase": "10. Instalações Elétricas, Lógicas e SPDA"}
-            ],            
+            ],
             "Instalações Hidráulicas": [
                 {"nome": "Rasgos e Tubulação", "fase": "9. Instalações Hidrossanitárias e Gás"}, 
                 {"nome": "Teste de Estanqueidade", "fase": "9. Instalações Hidrossanitárias e Gás"}, 
