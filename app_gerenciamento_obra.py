@@ -18,7 +18,7 @@ def remover_acentos(texto):
 # ==========================================
 # MOTOR DE TABELAS PDF (CABEÇALHOS REPETIDOS E ORIENTAÇÃO DINÂMICA)
 # ==========================================
-def gerar_tabela_pdf(pdf, df, col_widths, col_names, base_x=10, orient="P"):
+def gerar_tabela_pdf(pdf, df, col_widths, col_names, base_x=10, orient="P", max_y=275):
     def imprimir_cabecalho():
         pdf.set_fill_color(41, 128, 185)
         pdf.set_text_color(255, 255, 255)
@@ -47,10 +47,7 @@ def gerar_tabela_pdf(pdf, df, col_widths, col_names, base_x=10, orient="P"):
         line_height = 5
         row_height = max_lines * line_height
         
-        # O limite da página muda se estivermos em Retrato (275) ou Paisagem (190)
-        max_y = 275 if orient == "P" else 185
-        
-        # Se ultrapassar o limite, cria nova página e REIMPRIME O CABEÇALHO!
+        # O limite da página usa o max_y passado no argumento para suportar A3 e A4
         if pdf.get_y() + row_height > max_y:
             pdf.add_page(orientation=orient)
             pdf.set_y(15)
@@ -224,7 +221,7 @@ if not df_tarefas.empty:
 
 aba1, aba2, aba3, aba4, aba5, aba6, aba7 = st.tabs(["📊 Gantt & EAP", "📈 Curva S (Medição)", "💸 Financeiro", "🛒 Insumos (Curva ABC)", "📖 RDO", "💰 SINAPI", "⚙️ Planejar"])
 
-# --- ABA 1: GANTT E ATUALIZAÇÃO ---
+# --- ABA 1: GANTT, ATUALIZAÇÃO, TABELA EAP E PDF ---
 with aba1:
     col_met1, col_met2, col_btn = st.columns([2, 2, 1])
     df_top_level = df_tarefas[df_tarefas['parent_id'].isna()]
@@ -280,21 +277,22 @@ with aba1:
         st.dataframe(df_exib, column_config={"id": None, "Custo (R$)": st.column_config.NumberColumn(format="R$ %.2f"), "Venda (R$)": st.column_config.NumberColumn(format="R$ %.2f")}, hide_index=True, use_container_width=True)
 
         # ==========================================
-        # GERAÇÃO DO PDF HÍBRIDO (PAISAGEM + RETRATO)
+        # GERAÇÃO DO PDF HÍBRIDO EM A3 (EXCLUSIVO ABA 1)
         # ==========================================
         st.divider()
-        st.write("📄 **Exportar Cronogramas Oficiais (PDF Profissional)**")
+        st.write("📄 **Exportar Cronogramas Oficiais (A3 Alta Resolução)**")
         c_pdf1, c_pdf2 = st.columns(2)
         tipo_pdf = "interno" if c_pdf1.button("🔒 Gerar PDF Interno (Custos)") else ("cliente" if c_pdf2.button("💼 Gerar PDF Cliente (Venda)") else None)
             
         if tipo_pdf:
-            with st.spinner("Desenhando gráficos e estruturando as páginas do PDF..."):
+            with st.spinner("Desenhando gráficos e estruturando as páginas em formato A3..."):
                 import matplotlib.pyplot as plt
                 import matplotlib.dates as mdates
                 
                 # Gráfico Elástico para acomodar todas as tarefas
                 altura_grafico = max(5, len(df_tarefas) * 0.25)
-                fig_pdf, ax = plt.subplots(figsize=(14, altura_grafico), dpi=150)
+                # Formato A3 exige uma resolução mais comprida na imagem
+                fig_pdf, ax = plt.subplots(figsize=(16, altura_grafico), dpi=150)
                 df_grafico = df_tarefas.copy().sort_values(by='data_inicio', ascending=False)
                 for idx, row in df_grafico.iterrows():
                     ax.barh(row['nome_servico'], mdates.date2num(row['data_fim']) - mdates.date2num(row['data_inicio']), left=mdates.date2num(row['data_inicio']), color="#b0bec5", edgecolor='black')
@@ -303,27 +301,27 @@ with aba1:
                 caminho_img = "gantt_temp.png"
                 plt.savefig(caminho_img); plt.close(fig_pdf)
 
-                pdf = FPDF(unit="mm", format="A4")
+                # Inicializa o PDF no formato A3!
+                pdf = FPDF(unit="mm", format="A3")
                 
-                # --- PÁGINA 1: GANTT (PAISAGEM) ---
+                # --- PÁGINA 1: GANTT (A3 PAISAGEM = 420mm de largura) ---
                 pdf.add_page(orientation="L")
-                pdf.set_font("Arial", "B", 16)
+                pdf.set_font("Arial", "B", 18)
                 pdf.set_fill_color(41, 128, 185); pdf.set_text_color(255, 255, 255)
-                pdf.cell(277, 12, remover_acentos(f"Cronograma Oficial - {obras_dict[obra_ativa_id]}"), ln=True, align="C", fill=True)
+                pdf.cell(400, 15, remover_acentos(f"Cronograma Oficial - {obras_dict[obra_ativa_id]}"), ln=True, align="C", fill=True)
                 pdf.ln(5)
                 
-                pdf.set_font("Arial", "B", 12); pdf.set_text_color(40, 40, 40)
-                titulo_valor = f"Custo Estimado: R$ {custo_total:,.2f}" if tipo_pdf == "interno" else f"Preco Total da Obra: R$ {preco_venda:,.2f}"
-                pdf.cell(277, 10, remover_acentos(titulo_valor.replace(",", "X").replace(".", ",").replace("X", ".")), ln=True, align="C")
-                pdf.image(caminho_img, x=10, w=277); pdf.ln(5)
-                
-                # --- PÁGINAS SEGUINTES: TABELA EAP (RETRATO) ---
-                pdf.add_page(orientation="P")
                 pdf.set_font("Arial", "B", 14); pdf.set_text_color(40, 40, 40)
-                pdf.cell(190, 10, "Estrutura Analitica do Projeto (EAP)", ln=True, align="C")
+                titulo_valor = f"Custo Estimado: R$ {custo_total:,.2f}" if tipo_pdf == "interno" else f"Preco Total da Obra: R$ {preco_venda:,.2f}"
+                pdf.cell(400, 10, remover_acentos(titulo_valor.replace(",", "X").replace(".", ",").replace("X", ".")), ln=True, align="C")
+                pdf.image(caminho_img, x=10, w=400); pdf.ln(5)
+                
+                # --- PÁGINAS SEGUINTES: TABELA EAP (A3 RETRATO = 297mm de largura x 420mm de altura) ---
+                pdf.add_page(orientation="P")
+                pdf.set_font("Arial", "B", 16); pdf.set_text_color(40, 40, 40)
+                pdf.cell(277, 10, "Estrutura Analitica do Projeto (EAP)", ln=True, align="C")
                 pdf.ln(5)
                 
-                # Preparação do DataFrame
                 df_pdf_eap = df_exib.drop(columns=['id']).copy()
                 if tipo_pdf == "interno":
                     df_pdf_eap = df_pdf_eap.drop(columns=['Venda (R$)'])
@@ -336,9 +334,11 @@ with aba1:
                     
                 df_pdf_eap['Conc. %'] = df_pdf_eap['Conc. %'].apply(lambda x: f"{int(x)}%" if pd.notna(x) else "")
                 
-                # Larguras reduzidas para caber perfeitamente na folha Retrato (Total = 190mm)
-                col_widths = [95, 22, 22, 16, 35]
-                gerar_tabela_pdf(pdf, df_pdf_eap, col_widths, col_names, base_x=10, orient="P")
+                # Larguras gigantes para cobrir o A3 Retrato (Soma = 277mm)
+                col_widths = [145, 30, 30, 22, 50]
+                
+                # A folha A3 Retrato tem 420mm de altura, o limite max_y seguro é 390
+                gerar_tabela_pdf(pdf, df_pdf_eap, col_widths, col_names, base_x=10, orient="P", max_y=390)
                 
                 pdf.output("relatorio_gantt.pdf")
                 with open("relatorio_gantt.pdf", "rb") as f: st.session_state['pdf_gantt'] = f.read()
@@ -346,8 +346,8 @@ with aba1:
                 except: pass
                 
         if 'pdf_gantt' in st.session_state:
-            st.success("Relatório gerado com sucesso!")
-            st.download_button("⬇️ Baixar PDF do Cronograma", data=st.session_state['pdf_gantt'], file_name="Cronograma_EAP.pdf", mime="application/pdf")
+            st.success("Relatório A3 gerado com sucesso!")
+            st.download_button("⬇️ Baixar PDF (A3)", data=st.session_state['pdf_gantt'], file_name="Cronograma_EAP.pdf", mime="application/pdf")
 
 # --- ABA 2: CURVA S E MEDIÇÃO ---
 with aba2:
@@ -399,7 +399,7 @@ with aba2:
                 pdf.cell(90, 10, remover_acentos(f"Saldo para Medicao: R$ {max(0, ev_venda - faturado):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")), border=1, align="C")
                 
                 pdf.output("relatorio_medicao.pdf")
-                with open("relatorio_medicao.pdf", "rb") as f: st.download_button("⬇️️ Baixar PDF (Curva S)", data=f.read(), file_name="CurvaS_Medicao.pdf", mime="application/pdf")
+                with open("relatorio_medicao.pdf", "rb") as f: st.download_button("⬇ Baixar PDF (Curva S)", data=f.read(), file_name="CurvaS_Medicao.pdf", mime="application/pdf")
                 try: os.remove('scurve_temp.png')
                 except: pass
             else:
@@ -472,7 +472,7 @@ with aba3:
                 df_pdf_fin['valor'] = df_pdf_fin['valor'].apply(lambda x: f"R$ {float(x):,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
                 df_pdf_fin['data_vencimento'] = pd.to_datetime(df_pdf_fin['data_vencimento']).dt.strftime('%d/%m/%Y')
                 
-                gerar_tabela_pdf(pdf, df_pdf_fin, [25, 75, 35, 25, 25], ["Tipo", "Descricao", "Valor", "Vencimento", "Status"], base_x=12.5, orient="P")
+                gerar_tabela_pdf(pdf, df_pdf_fin, [25, 75, 35, 25, 25], ["Tipo", "Descricao", "Valor", "Vencimento", "Status"], base_x=12.5, orient="P", max_y=275)
                 
                 pdf.output("relatorio_caixa.pdf")
                 with open("relatorio_caixa.pdf", "rb") as f: st.download_button("⬇️ Baixar PDF (Caixa)", data=f.read(), file_name="Financeiro.pdf", mime="application/pdf")
@@ -521,7 +521,7 @@ with aba4:
                 df_pdf_abc['% do Total'] = df_pdf_abc['% do Total'].apply(lambda x: f"{x:.1f}%")
                 df_pdf_abc['% Acumulado'] = df_pdf_abc['% Acumulado'].apply(lambda x: f"{x:.1f}%")
                 
-                gerar_tabela_pdf(pdf, df_pdf_abc, [120, 30, 40, 25, 25], ["Pacote de Contratacao", "Data Limite", "Custo Estimado", "% Total", "% Acumulado"], base_x=28.5, orient="L")
+                gerar_tabela_pdf(pdf, df_pdf_abc, [120, 30, 40, 25, 25], ["Pacote de Contratacao", "Data Limite", "Custo Estimado", "% Total", "% Acumulado"], base_x=28.5, orient="L", max_y=185)
                 
                 pdf.output("relatorio_abc.pdf")
                 with open("relatorio_abc.pdf", "rb") as f: st.download_button("⬇️ Baixar PDF (Curva ABC)", data=f.read(), file_name="CurvaABC.pdf", mime="application/pdf")
