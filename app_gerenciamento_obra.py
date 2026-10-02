@@ -17,8 +17,7 @@ def remover_acentos(texto):
 # MOTOR DE TABELAS PDF (LINHAS AUTOMÁTICAS E CORES)
 # ==========================================
 def gerar_tabela_pdf(pdf, df, col_widths, col_names, base_x=10):
-    # Cabeçalho da Tabela
-    pdf.set_fill_color(41, 128, 185) # Azul Corporativo
+    pdf.set_fill_color(41, 128, 185)
     pdf.set_text_color(255, 255, 255)
     pdf.set_font("Arial", 'B', 9)
     pdf.set_xy(base_x, pdf.get_y())
@@ -26,15 +25,12 @@ def gerar_tabela_pdf(pdf, df, col_widths, col_names, base_x=10):
         pdf.cell(w, 8, remover_acentos(name), border=0, fill=True, align='C')
     pdf.ln(8)
     
-    # Corpo da Tabela
     pdf.set_text_color(40, 40, 40)
     pdf.set_font("Arial", '', 8)
     fill = False
     
     for idx, row in df.iterrows():
         row_data = [remover_acentos(str(x)) for x in row.values]
-        
-        # Calcula quantas linhas o texto precisa (Quebra automática)
         max_lines = 1
         for text, w in zip(row_data, col_widths):
             width_text = pdf.get_string_width(text)
@@ -44,14 +40,10 @@ def gerar_tabela_pdf(pdf, df, col_widths, col_names, base_x=10):
         line_height = 5
         row_height = max_lines * line_height
         
-        # Cria nova página se a tabela chegar ao fim da folha
         if pdf.get_y() + row_height > 275:
-            pdf.add_page()
-            pdf.set_y(20) 
+            pdf.add_page(); pdf.set_y(20) 
             
         y_start = pdf.get_y()
-        
-        # Fundo alternado (Efeito Zebra)
         if fill:
             pdf.set_fill_color(240, 245, 250)
             pdf.rect(base_x, y_start, sum(col_widths), row_height, 'F')
@@ -62,7 +54,6 @@ def gerar_tabela_pdf(pdf, df, col_widths, col_names, base_x=10):
             pdf.multi_cell(w, line_height, text, border=0, align='C')
             x_curr += w
         
-        # Linha inferior sutil
         pdf.set_draw_color(200, 200, 200)
         pdf.line(base_x, y_start + row_height, base_x + sum(col_widths), y_start + row_height)
         pdf.set_xy(base_x, y_start + row_height)
@@ -257,6 +248,23 @@ with aba2:
     st.header("📈 Medição e Curva S")
     df_base = df_tarefas[df_tarefas['base_inicio'].notna()].copy()
     
+    # 1. CÁLCULO DOS DADOS DA CURVA S (Sempre executa para evitar NameError)
+    ev_venda = sum(float(r['custo_previsto']) * (1 + (taxa_bdi/100)) * (r['conclusao_percentual']/100) for _, r in df_tarefas.iterrows())
+    datas_g, pv_acumulado = [], []
+    
+    if not df_base.empty:
+        min_d, max_d = df_base['base_inicio'].min(), df_base['base_fim'].max()
+        datas_g = [min_d + timedelta(days=x) for x in range((max_d - min_d).days + 1)]
+        acc = 0
+        for d in datas_g:
+            c_dia = 0
+            if d.weekday() < 5: 
+                for _, r in df_base.iterrows():
+                    if r['base_inicio'] <= d <= r['base_fim']:
+                        c_dia += (float(r['base_custo']) * (1 + (taxa_bdi/100))) / (bus_days_between(r['base_inicio'], r['base_fim']) + 1)
+            acc += c_dia; pv_acumulado.append(acc)
+    
+    # 2. BOTÃO DE PDF 
     if st.button("📄 Gerar PDF da Curva S e Medição"):
         with st.spinner("Gerando PDF da Curva S..."):
             import matplotlib.pyplot as plt
@@ -269,20 +277,7 @@ with aba2:
             pdf.ln(5)
 
             if not df_base.empty:
-                min_d, max_d = df_base['base_inicio'].min(), df_base['base_fim'].max()
-                datas_g = [min_d + timedelta(days=x) for x in range((max_d - min_d).days + 1)]
-                pv_acumulado, acc = [], 0
-                for d in datas_g:
-                    c_dia = 0
-                    if d.weekday() < 5: 
-                        for _, r in df_base.iterrows():
-                            if r['base_inicio'] <= d <= r['base_fim']:
-                                c_dia += (float(r['base_custo']) * (1 + (taxa_bdi/100))) / (bus_days_between(r['base_inicio'], r['base_fim']) + 1)
-                    acc += c_dia; pv_acumulado.append(acc)
-                
-                ev_venda = sum(float(r['custo_previsto']) * (1 + (taxa_bdi/100)) * (r['conclusao_percentual']/100) for _, r in df_tarefas.iterrows())
-                
-                # Gera Gráfico para o PDF
+                # Gera Gráfico para o PDF usando as variáveis calculadas acima
                 fig_s_pdf, ax = plt.subplots(figsize=(10, 4), dpi=150)
                 ax.plot(datas_g, pv_acumulado, color='#2980b9', linewidth=2, label='Planejado')
                 ax.plot([hoje], [ev_venda], marker='*', color='#27ae60', markersize=15, label='Executado (Hoje)')
@@ -309,6 +304,7 @@ with aba2:
             else:
                 st.error("Salve a Baseline primeiro para gerar o PDF!")
 
+    # 3. INTERFACE DA ABA
     col_curva, col_med = st.columns([2, 1])
     with col_curva:
         if not df_base.empty:
@@ -323,7 +319,6 @@ with aba2:
                     s.commit(); st.rerun()
 
     with col_med:
-        ev_venda = sum(float(r['custo_previsto']) * (1 + (taxa_bdi/100)) * (r['conclusao_percentual']/100) for _, r in df_tarefas.iterrows())
         df_med = conn.query("SELECT * FROM medicoes WHERE obra_id = :oid ORDER BY data_medicao", params={"oid": int(obra_ativa_id)}, ttl=0)
         faturado = df_med['valor_medido'].sum() if not df_med.empty else 0.0
         saldo = ev_venda - faturado
@@ -420,13 +415,12 @@ with aba4:
                 pdf.ln(5)
                 pdf.image('pareto_temp.png', x=15, w=260); pdf.ln(5)
                 
-                df_pdf_abc = df_abc.drop(columns=['Fase']).copy() # Esconde fase para caber melhor
+                df_pdf_abc = df_abc.drop(columns=['Fase']).copy()
                 df_pdf_abc['Data Limite'] = pd.to_datetime(df_pdf_abc['Data Limite']).dt.strftime('%d/%m/%Y')
                 df_pdf_abc['Custo (Verba)'] = df_pdf_abc['Custo (Verba)'].apply(lambda x: f"R$ {float(x):,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
                 df_pdf_abc['% do Total'] = df_pdf_abc['% do Total'].apply(lambda x: f"{x:.1f}%")
                 df_pdf_abc['% Acumulado'] = df_pdf_abc['% Acumulado'].apply(lambda x: f"{x:.1f}%")
                 
-                # Gera tabela centralizada (margin left 30)
                 gerar_tabela_pdf(pdf, df_pdf_abc, [120, 30, 40, 25, 25], ["Pacote de Contratacao", "Data Limite", "Custo Estimado", "% Total", "% Acumulado"], base_x=20)
                 
                 pdf.output("relatorio_abc.pdf")
