@@ -6,13 +6,12 @@ from sqlalchemy import text
 import unicodedata
 from fpdf import FPDF
 import os
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta
 import pytz
 
 def remover_acentos(texto):
     return ''.join(c for c in unicodedata.normalize('NFD', str(texto)) if unicodedata.category(c) != 'Mn')
 
-# --- LISTA OFICIAL DE MACRO-ETAPAS (PADRÃO SINAPI/EAP) ---
 FASES_DA_OBRA = [
     "1. Serviços Preliminares e Projetos", "2. Canteiro de Obras e Locação",
     "3. Movimento de Terra (Terraplenagem)", "4. Fundações e Contenções",
@@ -26,7 +25,6 @@ FASES_DA_OBRA = [
     "19. Taxas, Licenças e Administrativo"
 ]
 
-# --- FUNÇÕES DE ENGENHARIA (CALENDÁRIO DIAS ÚTEIS) ---
 def add_bus_days(start_date, days):
     if days == 0: return start_date
     current = start_date
@@ -34,8 +32,7 @@ def add_bus_days(start_date, days):
     step = 1 if days > 0 else -1
     while added < abs(days):
         current += timedelta(days=step)
-        if current.weekday() < 5: 
-            added += 1
+        if current.weekday() < 5: added += 1
     return current
 
 def bus_days_between(start, end):
@@ -46,7 +43,6 @@ def bus_days_between(start, end):
         curr += timedelta(days=1)
     return days
 
-# --- MOTOR CPM (MS PROJECT) ---
 def rodar_motor_cpm(conn, obra_id):
     with conn.session as s:
         result = s.execute(text("SELECT * FROM tarefas WHERE obra_id = :oid"), {"oid": obra_id}).mappings().all()
@@ -63,7 +59,6 @@ def rodar_motor_cpm(conn, obra_id):
                     if pred:
                         lag = t['lag_dias'] or 0
                         tipo = t['tipo_dep'] or 'TI'
-                        
                         nova_ini = t['data_inicio']
                         if tipo == 'TI': nova_ini = add_bus_days(pred['data_fim'], lag + 1)
                         elif tipo == 'II': nova_ini = add_bus_days(pred['data_inicio'], lag)
@@ -81,7 +76,6 @@ def rodar_motor_cpm(conn, obra_id):
                 min_ini = min(c['data_inicio'] for c in children)
                 max_fim = max(c['data_fim'] for c in children)
                 sum_c = sum(c['custo_previsto'] or 0 for c in children)
-                
                 total_c = sum_c if sum_c > 0 else len(children)
                 sum_perc = sum((c['conclusao_percentual']*(c['custo_previsto'] or 1))/total_c for c in children) if sum_c>0 else sum(c['conclusao_percentual'] for c in children)/len(children)
                 
@@ -96,11 +90,8 @@ def rodar_motor_cpm(conn, obra_id):
                       {"i": t['data_inicio'], "f": t['data_fim'], "c": float(t['custo_previsto'] or 0), "p": int(t['conclusao_percentual'] or 0), "id": t_id})
         s.commit()
 
-st.set_page_config(page_title="Gestor de Obras", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="ERP Obras", page_icon="🏗️️", layout="wide")
 
-# ==========================================
-# LOGIN & CONEXÃO (COM BLINDAGEM DE QUEDA)
-# ==========================================
 def check_password():
     if "autenticado" not in st.session_state: st.session_state["autenticado"] = False
     if not st.session_state["autenticado"]:
@@ -114,28 +105,29 @@ def check_password():
 if not check_password(): st.stop()
 
 url_correta = st.secrets["DATABASE_URL"].replace("postgresql://", "postgresql+psycopg2://")
-
-# CORREÇÃO CRÍTICA DO NEON: pool_pre_ping impede o OperationalError em conexões adormecidas!
 conn = st.connection("postgresql", type="sql", url=url_correta, pool_pre_ping=True, pool_recycle=300)
 
 # ==========================================
-# BARRA LATERAL (PROJETOS)
+# BARRA LATERAL E BDI
 # ==========================================
 with st.sidebar:
     st.header("🏢 Seus Projetos")
     try: df_obras = conn.query("SELECT * FROM obras ORDER BY id;", ttl=0)
-    except: st.error("Rode o SQL no Neon primeiro!"); st.stop()
+    except: st.error("Rode o SQL no Neon!"); st.stop()
         
     obra_ativa_id = None
+    taxa_bdi = 0.0
     if not df_obras.empty:
         obras_dict = dict(zip(df_obras['id'], df_obras['nome']))
         obra_ativa_id = st.selectbox("Projeto Ativo:", options=list(obras_dict.keys()), format_func=lambda x: obras_dict[x])
+        taxa_bdi = float(df_obras[df_obras['id'] == obra_ativa_id]['bdi'].values[0])
         
-        with st.expander("⚙️ Gerenciar Projeto", expanded=False):
+        with st.expander("⚙️ Gerenciar BDI e Projeto", expanded=False):
+            novo_bdi = st.number_input("Taxa de BDI (%)", min_value=0.0, max_value=100.0, value=taxa_bdi, step=0.1)
             novo_nome = st.text_input("Renomear Projeto:", value=obras_dict[obra_ativa_id])
-            if st.button("💾 Salvar Nome"):
+            if st.button("💾 Salvar Alterações"):
                 with conn.session as s:
-                    s.execute(text("UPDATE obras SET nome = :n WHERE id = :id"), {"n": novo_nome, "id": int(obra_ativa_id)})
+                    s.execute(text("UPDATE obras SET nome = :n, bdi = :b WHERE id = :id"), {"n": novo_nome, "b": novo_bdi, "id": int(obra_ativa_id)})
                     s.commit()
                 st.rerun()
             st.divider()
@@ -155,33 +147,35 @@ with st.sidebar:
 
 if not obra_ativa_id: st.stop()
 
-# --- CARREGA DADOS DO PROJETO ---
+# --- CARREGA DADOS GERAIS ---
 df_tarefas = conn.query("SELECT * FROM tarefas WHERE obra_id = :oid ORDER BY data_inicio, id;", params={"oid": int(obra_ativa_id)}, ttl=0)
-opcoes_dep = {0: "Nenhuma"}
-opcoes_parent = {0: "Nenhuma (É Macro-etapa raiz)"}
+opcoes_dep, opcoes_parent = {0: "Nenhuma"}, {0: "Nenhuma (É Macro-etapa raiz)"}
 if not df_tarefas.empty:
     for _, r in df_tarefas.iterrows():
         nome = r['nome_servico'] if pd.notna(r['nome_servico']) else f"ID {r['id']}"
         opcoes_dep[r['id']] = nome
         if pd.isna(r['parent_id']): opcoes_parent[r['id']] = f"📦 {nome}"
 
-aba1, aba4, aba2, aba3 = st.tabs(["📊 Gantt & EAP", "📈 Curva S (Baseline)", "💰 Orçamento (SINAPI)", "⚙️ Planejar Etapas"])
+fuso_brasil = pytz.timezone('America/Sao_Paulo')
+hoje = datetime.now(fuso_brasil).date()
+
+aba1, aba2, aba3, aba4, aba5, aba6 = st.tabs(["📊 Gantt & EAP", "📈 Curva S & Medição", "📖 Diário (RDO)", "🛒 Lista de Compras", "💰 SINAPI", "⚙️ Planejar"])
 
 # ==========================================
-# ABA 1: GANTT, EAP E RECALCULO
+# ABA 1: GANTT, EAP E PDF DUPLO (INTERNO VS CLIENTE)
 # ==========================================
 with aba1:
-    col_met, col_btn = st.columns([3, 1])
-    with col_met:
-        df_top_level = df_tarefas[df_tarefas['parent_id'].isna()]
-        custo_total = df_top_level['custo_previsto'].sum() if not df_top_level.empty else 0
-        st.metric("Custo Total Real (Projeto)", f"R$ {custo_total:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
-        
+    col_met1, col_met2, col_btn = st.columns([2, 2, 1])
+    df_top_level = df_tarefas[df_tarefas['parent_id'].isna()]
+    custo_total = df_top_level['custo_previsto'].sum() if not df_top_level.empty else 0
+    preco_venda = custo_total * (1 + (taxa_bdi/100))
+    
+    with col_met1: st.metric("Custo Total (Interno)", f"R$ {custo_total:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+    with col_met2: st.metric(f"Preço de Venda (BDI {taxa_bdi}%)", f"R$ {preco_venda:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
     with col_btn:
         st.write("")
-        if st.button("🔄 Recalcular Cronograma (CPM)", type="primary", use_container_width=True):
-            rodar_motor_cpm(conn, int(obra_ativa_id))
-            st.rerun()
+        if st.button("🔄 Recalcular CPM", type="primary", use_container_width=True):
+            rodar_motor_cpm(conn, int(obra_ativa_id)); st.rerun()
 
     if not df_tarefas.empty:
         df_tarefas['data_inicio'] = pd.to_datetime(df_tarefas['data_inicio']).dt.date
@@ -194,93 +188,202 @@ with aba1:
         fig.update_yaxes(autorange="reversed"); fig.update_layout(height=400, margin=dict(l=0, r=0, t=30, b=0))
         st.plotly_chart(fig, use_container_width=True)
         
-        # --- TABELA EAP (COM TOTAIS) ---
-        st.subheader("📋 Estrutura Analítica do Projeto (EAP)")
-        
+        # --- EAP ---
+        st.subheader("📋 Estrutura Analítica (EAP)")
         df_exib_rows = []
-        
-        # CORREÇÃO DO MISTÉRIO DA FASE: Extrai todas as fases que o banco tem (incluindo as antigas não oficiais) e ordena as oficiais no topo!
         fases_presentes = sorted(df_tarefas['fase'].unique(), key=lambda x: FASES_DA_OBRA.index(x) if x in FASES_DA_OBRA else 999)
         
         for fase in fases_presentes:
             df_fase = df_tarefas[df_tarefas['fase'] == fase]
-            
             for _, row in df_fase.iterrows():
-                servico_nome = "  ↳ " + row['nome_servico'] if pd.notna(row['parent_id']) else "📦 " + row['nome_servico']
                 df_exib_rows.append({
                     "id": row['id'],
-                    "Serviço": servico_nome,
+                    "Serviço": ("  ↳ " if pd.notna(row['parent_id']) else "📦 ") + row['nome_servico'],
                     "Início": pd.to_datetime(row['data_inicio']).strftime('%d/%m/%Y'),
                     "Fim": pd.to_datetime(row['data_fim']).strftime('%d/%m/%Y'),
-                    "conclusao_percentual": row['conclusao_percentual'],
-                    "custo_previsto": row['custo_previsto']
+                    "Conc. %": row['conclusao_percentual'],
+                    "Custo (R$)": row['custo_previsto'],
+                    "Venda (R$)": float(row['custo_previsto']) * (1 + (taxa_bdi/100))
                 })
-                
-            total_fase = df_fase[df_fase['parent_id'].isna()]['custo_previsto'].sum()
-            df_exib_rows.append({
-                "id": None,
-                "Serviço": f"➤ SUBTOTAL: {fase.upper()}",
-                "Início": "", "Fim": "", "conclusao_percentual": None, "custo_previsto": total_fase
-            })
+            t_custo = df_fase[df_fase['parent_id'].isna()]['custo_previsto'].sum()
+            df_exib_rows.append({"id": None, "Serviço": f"➤ SUBTOTAL: {fase.upper()}", "Início": "", "Fim": "", "Conc. %": None, "Custo (R$)": t_custo, "Venda (R$)": t_custo * (1 + (taxa_bdi/100))})
             
-        df_exib_rows.append({
-            "id": None, "Serviço": "⭐ TOTAL GERAL DA OBRA", "Início": "", "Fim": "", "conclusao_percentual": None, "custo_previsto": custo_total
-        })
+        df_exib_rows.append({"id": None, "Serviço": "⭐ TOTAL GERAL DA OBRA", "Início": "", "Fim": "", "Conc. %": None, "Custo (R$)": custo_total, "Venda (R$)": preco_venda})
         
         df_exib = pd.DataFrame(df_exib_rows)
-        st.dataframe(df_exib, column_config={"id": None, "conclusao_percentual": st.column_config.NumberColumn("Conclusão %", format="%d"), "custo_previsto": st.column_config.NumberColumn("Custo R$", format="R$ %.2f")}, hide_index=True, use_container_width=True)
+        st.dataframe(df_exib, column_config={"id": None, "Custo (R$)": st.column_config.NumberColumn(format="R$ %.2f"), "Venda (R$)": st.column_config.NumberColumn(format="R$ %.2f")}, hide_index=True, use_container_width=True)
+
+        # --- EXPORTAÇÃO DUPLA DE PDF ---
+        st.divider()
+        st.write("📄 **Exportar Cronogramas (Geração Dinâmica)**")
+        c_pdf1, c_pdf2 = st.columns(2)
+        
+        tipo_pdf = None
+        if c_pdf1.button("🔒 Gerar PDF Interno (Exibe Custos da Construtora)"): tipo_pdf = "interno"
+        if c_pdf2.button("💼 Gerar PDF Comercial (Exibe Preço de Venda p/ Cliente)"): tipo_pdf = "cliente"
+            
+        if tipo_pdf:
+            with st.spinner("Desenhando gráfico e processando PDF..."):
+                import matplotlib.pyplot as plt
+                import matplotlib.dates as mdates
+                fig_pdf, ax = plt.subplots(figsize=(10, 4), dpi=150)
+                df_grafico = df_tarefas.copy().sort_values(by='data_inicio', ascending=False)
+                for idx, row in df_grafico.iterrows():
+                    ax.barh(row['nome_servico'], mdates.date2num(row['plot_fim']) - mdates.date2num(row['plot_ini']), left=mdates.date2num(row['plot_ini']), color="#b0bec5", edgecolor='black')
+                ax.xaxis_date(); ax.xaxis.set_major_formatter(mdates.DateFormatter('%d/%m/%Y'))
+                plt.xticks(rotation=45, ha='right', fontsize=8); plt.yticks(fontsize=8); plt.tight_layout()
+                caminho_img = "gantt_temp.png"
+                plt.savefig(caminho_img); plt.close(fig_pdf)
+
+                pdf = FPDF(orientation="L", unit="mm", format="A4")
+                pdf.add_page(); pdf.set_font("Arial", "B", 16)
+                pdf.cell(270, 10, remover_acentos(f"Cronograma Oficial - {obras_dict[obra_ativa_id]}"), ln=True, align="C")
+                pdf.set_font("Arial", "", 12)
+                
+                titulo_valor = f"Custo Estimado: R$ {custo_total:,.2f}" if tipo_pdf == "interno" else f"Preco Total da Obra: R$ {preco_venda:,.2f}"
+                pdf.cell(270, 10, remover_acentos(titulo_valor.replace(",", "X").replace(".", ",").replace("X", ".")), ln=True, align="C")
+                pdf.image(caminho_img, x=20, w=250); pdf.ln(5)
+                
+                pdf.set_font("Arial", "B", 8)
+                col_nome_valor = "Custo" if tipo_pdf == "interno" else "Valor"
+                for header, w in zip(["Servico", "Inicio", "Termino", "Conc.", col_nome_valor], [120, 30, 30, 20, 40]):
+                    pdf.cell(w, 8, header, 1, ln=(header==col_nome_valor))
+                
+                pdf.set_font("Arial", "", 8)
+                for _, row in df_exib.iterrows():
+                    if row['id'] is not None:
+                        val = row['Custo (R$)'] if tipo_pdf == "interno" else row['Venda (R$)']
+                        pdf.cell(120, 8, remover_acentos(str(row['Serviço']))[:70], 1)
+                        pdf.cell(30, 8, str(row['Início']), 1)
+                        pdf.cell(30, 8, str(row['Fim']), 1)
+                        pdf.cell(20, 8, f"{row['Conc. %']}%", 1)
+                        pdf.cell(40, 8, f"R$ {float(val):,.2f}".replace(",", "X").replace(".", ",").replace("X", "."), 1, ln=True)
+                
+                pdf.output("relatorio.pdf")
+                with open("relatorio.pdf", "rb") as f: st.session_state['pdf_pronto'] = f.read()
+                try: os.remove(caminho_img)
+                except: pass
+
+        if 'pdf_pronto' in st.session_state:
+            st.success("Relatório gerado!")
+            st.download_button("⬇️ Baixar Relatório (PDF)", data=st.session_state['pdf_pronto'], file_name="Cronograma_Obra.pdf", mime="application/pdf")
 
 # ==========================================
-# ABA 4: CURVA S E LINHA DE BASE
-# ==========================================
-with aba4:
-    st.header("📈 Curva S e Linha de Base")
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        st.write("A **Linha de Base** tira uma fotografia do orçamento original para análise de Valor Agregado.")
-    with col2:
-        if st.button("📸 Salvar Linha de Base Atual"):
-            with conn.session as s:
-                s.execute(text("UPDATE tarefas SET base_inicio=data_inicio, base_fim=data_fim, base_custo=custo_previsto WHERE obra_id=:oid"), {"oid": int(obra_ativa_id)})
-                s.commit()
-            st.success("Fotografia Salva!")
-            st.rerun()
-            
-    df_base = df_tarefas[df_tarefas['base_inicio'].notna()].copy()
-    if not df_base.empty:
-        min_d, max_d = df_base['base_inicio'].min(), df_base['base_fim'].max()
-        datas_grafico = [min_d + timedelta(days=x) for x in range((max_d - min_d).days + 1)]
-        
-        pv_acumulado, acc = [], 0
-        for d in datas_grafico:
-            custo_do_dia = 0
-            if d.weekday() < 5: 
-                for _, r in df_base.iterrows():
-                    if r['base_inicio'] <= d <= r['base_fim']:
-                        dur = bus_days_between(r['base_inicio'], r['base_fim']) + 1
-                        custo_do_dia += float(r['base_custo']) / dur
-            acc += custo_do_dia
-            pv_acumulado.append(acc)
-            
-        fig_s = go.Figure()
-        fig_s.add_trace(go.Scatter(x=datas_grafico, y=pv_acumulado, mode='lines', name='Custo Planejado (Baseline)', line=dict(color='blue', width=4)))
-        
-        ev_total = sum(float(r['base_custo']) * (r['conclusao_percentual']/100) for _, r in df_base.iterrows() if pd.notna(r['base_custo']))
-        hoje = datetime.now(pytz.timezone('America/Sao_Paulo')).date()
-        fig_s.add_trace(go.Scatter(x=[hoje], y=[ev_total], mode='markers', name='Valor Agregado Realizado (EV)', marker=dict(color='green', size=15, symbol='star')))
-        
-        fig_s.update_layout(title="Curva S de Progresso Financeiro", xaxis_title="Tempo", yaxis_title="R$ Acumulado")
-        st.plotly_chart(fig_s, use_container_width=True)
-    else:
-        st.warning("⚠️ Linha de base não definida. Salve a configuração atual primeiro no botão acima.")
-
-# ==========================================
-# ABA 2: BUSCADOR SINAPI
+# ABA 2: CURVA S E MEDIÇÕES (FATURAMENTO)
 # ==========================================
 with aba2:
-    st.subheader("Adicionar do SINAPI à Obra Ativa")
+    st.header("📈 Medição e Faturamento")
+    df_base = df_tarefas[df_tarefas['base_inicio'].notna()].copy()
+    
+    col_curva, col_med = st.columns([2, 1])
+    with col_curva:
+        st.subheader("Curva S (Evolução Financeira)")
+        if not df_base.empty:
+            min_d, max_d = df_base['base_inicio'].min(), df_base['base_fim'].max()
+            datas_grafico = [min_d + timedelta(days=x) for x in range((max_d - min_d).days + 1)]
+            pv_acumulado, acc = [], 0
+            for d in datas_grafico:
+                custo_do_dia = 0
+                if d.weekday() < 5: 
+                    for _, r in df_base.iterrows():
+                        if r['base_inicio'] <= d <= r['base_fim']:
+                            dur = bus_days_between(r['base_inicio'], r['base_fim']) + 1
+                            custo_do_dia += (float(r['base_custo']) * (1 + (taxa_bdi/100))) / dur
+                acc += custo_do_dia
+                pv_acumulado.append(acc)
+                
+            fig_s = go.Figure()
+            fig_s.add_trace(go.Scatter(x=datas_grafico, y=pv_acumulado, mode='lines', name='Curva Planejada (Venda)', line=dict(color='blue', width=4)))
+            
+            ev_total_venda = sum(float(r['base_custo']) * (1 + (taxa_bdi/100)) * (r['conclusao_percentual']/100) for _, r in df_base.iterrows() if pd.notna(r['base_custo']))
+            fig_s.add_trace(go.Scatter(x=[hoje], y=[ev_total_venda], mode='markers', name='Executado Atual (EV)', marker=dict(color='green', size=15, symbol='star')))
+            st.plotly_chart(fig_s, use_container_width=True)
+        else:
+            st.warning("⚠️ Salve a Linha de Base (Baseline) para ativar a Curva S.")
+            if st.button("📸 Salvar Baseline (Congelar Planejamento Inicial)"):
+                with conn.session as s:
+                    s.execute(text("UPDATE tarefas SET base_inicio=data_inicio, base_fim=data_fim, base_custo=custo_previsto WHERE obra_id=:oid"), {"oid": int(obra_ativa_id)})
+                    s.commit()
+                st.rerun()
+
+    with col_med:
+        st.subheader("🧾 Fechamento de Medição")
+        ev_total_venda = sum(float(r['custo_previsto']) * (1 + (taxa_bdi/100)) * (r['conclusao_percentual']/100) for _, r in df_tarefas.iterrows())
+        df_medicoes = conn.query("SELECT * FROM medicoes WHERE obra_id = :oid ORDER BY data_medicao", params={"oid": int(obra_ativa_id)}, ttl=0)
+        
+        faturado_ate_agora = df_medicoes['valor_medido'].sum() if not df_medicoes.empty else 0.0
+        saldo_a_faturar = ev_total_venda - faturado_ate_agora
+        
+        st.metric("Total Executado (Preço Venda)", f"R$ {ev_total_venda:,.2f}")
+        st.metric("Já Faturado em Meses Anteriores", f"R$ {faturado_ate_agora:,.2f}")
+        st.metric("Saldo Liberado para Medição Hoje", f"R$ {max(0, saldo_a_faturar):,.2f}")
+        
+        if saldo_a_faturar > 0:
+            if st.button("💰 Gerar Fatura Deste Mês (Congelar Medição)"):
+                with conn.session as s:
+                    perc_geral = (ev_total_venda / preco_venda) * 100 if preco_venda > 0 else 0
+                    s.execute(text("INSERT INTO medicoes (obra_id, data_medicao, valor_medido, percentual_obra) VALUES (:o, :d, :v, :p)"), 
+                              {"o": int(obra_ativa_id), "d": hoje, "v": float(saldo_a_faturar), "p": perc_geral})
+                    s.commit()
+                st.success("Medição registada! O saldo a faturar foi zerado até que a obra avance mais.")
+                st.rerun()
+        
+        if not df_medicoes.empty:
+            st.write("**Histórico de Faturas:**")
+            st.dataframe(df_medicoes[['data_medicao', 'valor_medido']], hide_index=True)
+
+# ==========================================
+# ABA 3: DIÁRIO DE OBRA (RDO)
+# ==========================================
+with aba3:
+    st.header("📖 Relatório Diário de Obra (RDO)")
+    
+    with st.expander("➕ Preencher RDO de Hoje", expanded=True):
+        with st.form("form_rdo"):
+            d_rdo = st.date_input("Data do Relatório", value=hoje)
+            clima = st.selectbox("Condições Climáticas", ["Ensolarado", "Nublado", "Chuvoso", "Chuva Forte (Impeditiva)"])
+            efetivo = st.text_area("Efetivo na Obra (Ex: 1 Mestre, 2 Pedreiros)", height=70)
+            obs = st.text_area("Observações e Ocorrências", height=100)
+            
+            if st.form_submit_button("Salvar RDO"):
+                with conn.session as s:
+                    s.execute(text("INSERT INTO rdo (obra_id, data_relatorio, clima, efetivo, observacoes) VALUES (:o, :d, :c, :e, :obs)"),
+                              {"o": int(obra_ativa_id), "d": d_rdo, "c": clima, "e": efetivo, "obs": obs})
+                    s.commit()
+                st.success("RDO Salvo no Banco de Dados!")
+                st.rerun()
+                
+    df_rdo = conn.query("SELECT * FROM rdo WHERE obra_id = :oid ORDER BY data_relatorio DESC", params={"oid": int(obra_ativa_id)}, ttl=0)
+    if not df_rdo.empty:
+        st.subheader("Histórico de Diários")
+        for _, row in df_rdo.iterrows():
+            with st.expander(f"🗓️ {row['data_relatorio']} - Clima: {row['clima']}"):
+                st.write(f"**Efetivo:** {row['efetivo']}")
+                st.write(f"**Observações:** {row['observacoes']}")
+
+# ==========================================
+# ABA 4: LISTA DE COMPRAS E INSUMOS
+# ==========================================
+with aba4:
+    st.header("🛒 Lista de Compras e Insumos")
+    st.write("Esta aba organiza as macro-etapas para facilitar as cotações com fornecedores.")
+    
+    if not df_tarefas.empty:
+        st.subheader("Resumo Analítico para Compras (Custo de Canteiro)")
+        df_compras = df_tarefas[df_tarefas['parent_id'].isna()][['nome_servico', 'data_inicio', 'custo_previsto']].copy()
+        df_compras.columns = ['Pacote de Compra (Macro-etapa)', 'Data Limite para Compra', 'Verba Disponível (Custo)']
+        df_compras = df_compras.sort_values(by='Data Limite para Compra')
+        st.dataframe(df_compras, hide_index=True, use_container_width=True)
+        
+        st.info("💡 **Integração Futura:** Como criámos o campo `codigo_sinapi` no banco de dados, quando você importar a tabela Analítica do SINAPI, esta tela detalhará automaticamente os sacos de cimento e metros de areia precisos para cada etapa!")
+
+# ==========================================
+# ABA 5: SINAPI
+# ==========================================
+with aba5:
+    st.subheader("Adicionar do SINAPI à Obra")
     tipo_busca = st.radio("O que deseja orçar?", ["Serviços Completos (Composições)", "Materiais Isolados (Insumos)"])
-    busca = st.text_input("🔍 Buscar")
+    busca = st.text_input("🔍 Buscar (ex: Alvenaria, Concreto)")
     if busca:
         tabela_alvo = "sinapi_composicoes" if "Serviços" in tipo_busca else "sinapi_insumos"
         df_sinapi = conn.query(f"SELECT codigo, descricao, unidade, preco_mediano FROM {tabela_alvo} WHERE descricao ILIKE '%{busca}%' LIMIT 15;", ttl=600)
@@ -290,7 +393,7 @@ with aba2:
                 with st.expander(f"📦 {row['descricao'][:60]}... | R$ {float(row['preco_mediano']):.2f} / {row['unidade']}"):
                     with st.form(f"add_direto_{index}"):
                         col1, col2 = st.columns(2)
-                        qtd = col1.number_input(f"Quantidade", min_value=0.1, value=1.0)
+                        qtd = col1.number_input("Quantidade", min_value=0.1, value=1.0)
                         fase_esc = col2.selectbox("Fase", FASES_DA_OBRA)
                         c3, c4 = st.columns(2)
                         d_ini, d_fim = c3.date_input("Início"), c4.date_input("Término")
@@ -301,71 +404,33 @@ with aba2:
                             if d_ini > d_fim: st.error("Erro nas datas!")
                             else:
                                 with conn.session as s:
-                                    s.execute(text("""INSERT INTO tarefas (nome_servico, fase, data_inicio, data_fim, conclusao_percentual, custo_previsto, dependencia_id, obra_id) 
-                                                      VALUES (:n, :f, :i, :fim, 0, :c, :d, :ob)"""),
-                                              {"n": nome_abrev, "f": fase_esc, "i": d_ini, "fim": d_fim, "c": float(row['preco_mediano'])*qtd, "d": None if dep_escolhida==0 else dep_escolhida, "ob": int(obra_ativa_id)})
+                                    s.execute(text("""INSERT INTO tarefas (nome_servico, fase, data_inicio, data_fim, conclusao_percentual, custo_previsto, dependencia_id, obra_id, codigo_sinapi) 
+                                                      VALUES (:n, :f, :i, :fim, 0, :c, :d, :ob, :cod)"""),
+                                              {"n": nome_abrev, "f": fase_esc, "i": d_ini, "fim": d_fim, "c": float(row['preco_mediano'])*qtd, "d": None if dep_escolhida==0 else dep_escolhida, "ob": int(obra_ativa_id), "cod": row['codigo']})
                                     s.commit()
                                 st.rerun()
 
 # ==========================================
-# ABA 3: PLANEJAR ETAPAS E KITS ÚNICA
+# ABA 6: PLANEJAR KITS
 # ==========================================
-with aba3:
+with aba6:
     st.subheader("⚙️ Planejamento Avançado")
-    modo = st.radio("Método de Inserção:", ["Kits Rápido de Engenharia", "Tarefa Manual Detalhada (MS Project)"])
+    modo = st.radio("Método de Inserção:", ["Kits Rápido de Engenharia", "Tarefa Manual"])
     st.divider()
 
     if modo == "Kits Rápido de Engenharia":
-        st.write("Gera cadeias automáticas de serviço (CPM) descontando fins de semana.")
         kits = {
-            "Fundações Rasas (Sapatas/Blocos)": [
-                {"nome": "Escavação", "fase": "3. Movimento de Terra (Terraplenagem)"}, 
-                {"nome": "Armação da Fundação", "fase": "4. Fundações e Contenções"}, 
-                {"nome": "Concretagem", "fase": "4. Fundações e Contenções"}
-            ],
-            "Concretagem (Laje/Pilar)": [
-                {"nome": "Fôrmas", "fase": "5. Superestrutura (Concreto/Aço/Madeira)"}, 
-                {"nome": "Armação", "fase": "5. Superestrutura (Concreto/Aço/Madeira)"}, 
-                {"nome": "Concretagem", "fase": "5. Superestrutura (Concreto/Aço/Madeira)"}
-            ],
-            "Alvenaria e Acabamento": [
-                {"nome": "Alvenaria", "fase": "6. Alvenaria e Paredes de Vedação"}, 
-                {"nome": "Chapisco", "fase": "13. Revestimentos Internos e Externos"}, 
-                {"nome": "Reboco", "fase": "13. Revestimentos Internos e Externos"}
-            ],
-            "Forro de Gesso Acartonado (Drywall)": [
-                {"nome": "Estruturação e Tabica", "fase": "15. Forros e Pinturas"}, 
-                {"nome": "Emplacamento (Gesso)", "fase": "15. Forros e Pinturas"}, 
-                {"nome": "Tratamento de Juntas", "fase": "15. Forros e Pinturas"}
-            ],
-            "Pintura de Paredes/Teto": [
-                {"nome": "Selador/Fundo", "fase": "15. Forros e Pinturas"}, 
-                {"nome": "Massa (Corrida/Acrílica)", "fase": "15. Forros e Pinturas"}, 
-                {"nome": "Pintura (Acabamento)", "fase": "15. Forros e Pinturas"}
-            ],
-            "Porcelanato": [
-                {"nome": "Contrapiso", "fase": "14. Pisos e Rodapés"}, 
-                {"nome": "Assentamento", "fase": "14. Pisos e Rodapés"}, 
-                {"nome": "Rejunte", "fase": "14. Pisos e Rodapés"}
-            ],
-            "Instalações Elétricas (Básicas)": [
-                {"nome": "Tubulação/Eletrodutos", "fase": "10. Instalações Elétricas, Lógicas e SPDA"}, 
-                {"nome": "Enfiação/Cabeamento", "fase": "10. Instalações Elétricas, Lógicas e SPDA"}, 
-                {"nome": "Fechamento (Tomadas/Interruptores)", "fase": "10. Instalações Elétricas, Lógicas e SPDA"}
-            ],
-            "Instalações Hidráulicas": [
-                {"nome": "Rasgos e Tubulação", "fase": "9. Instalações Hidrossanitárias e Gás"}, 
-                {"nome": "Teste de Estanqueidade", "fase": "9. Instalações Hidrossanitárias e Gás"}, 
-                {"nome": "Fechamento de Rasgos", "fase": "9. Instalações Hidrossanitárias e Gás"}
-            ],
-            "Telhado Colonial": [
-                {"nome": "Madeiramento (Tesouras/Terças)", "fase": "7. Coberturas e Impermeabilizações"},
-                {"nome": "Assentamento de Telhas", "fase": "7. Coberturas e Impermeabilizações"},
-                {"nome": "Cumeeira e Rufos", "fase": "7. Coberturas e Impermeabilizações"}
-            ]
+            "Fundações Rasas (Sapatas/Blocos)": [{"nome": "Escavação", "fase": "3. Movimento de Terra (Terraplenagem)"}, {"nome": "Armação da Fundação", "fase": "4. Fundações e Contenções"}, {"nome": "Concretagem", "fase": "4. Fundações e Contenções"}],
+            "Concretagem (Laje/Pilar)": [{"nome": "Fôrmas", "fase": "5. Superestrutura (Concreto/Aço/Madeira)"}, {"nome": "Armação", "fase": "5. Superestrutura (Concreto/Aço/Madeira)"}, {"nome": "Concretagem", "fase": "5. Superestrutura (Concreto/Aço/Madeira)"}],
+            "Alvenaria e Acabamento": [{"nome": "Alvenaria", "fase": "6. Alvenaria e Paredes de Vedação"}, {"nome": "Chapisco", "fase": "13. Revestimentos Internos e Externos"}, {"nome": "Reboco", "fase": "13. Revestimentos Internos e Externos"}],
+            "Forro de Gesso (Drywall)": [{"nome": "Estruturação", "fase": "15. Forros e Pinturas"}, {"nome": "Emplacamento", "fase": "15. Forros e Pinturas"}, {"nome": "Juntas", "fase": "15. Forros e Pinturas"}],
+            "Pintura": [{"nome": "Selador", "fase": "15. Forros e Pinturas"}, {"nome": "Massa", "fase": "15. Forros e Pinturas"}, {"nome": "Acabamento", "fase": "15. Forros e Pinturas"}],
+            "Porcelanato": [{"nome": "Contrapiso", "fase": "14. Pisos e Rodapés"}, {"nome": "Assentamento", "fase": "14. Pisos e Rodapés"}, {"nome": "Rejunte", "fase": "14. Pisos e Rodapés"}],
+            "Elétrica": [{"nome": "Tubulação", "fase": "10. Instalações Elétricas, Lógicas e SPDA"}, {"nome": "Cabeamento", "fase": "10. Instalações Elétricas, Lógicas e SPDA"}, {"nome": "Tomadas", "fase": "10. Instalações Elétricas, Lógicas e SPDA"}],
+            "Hidráulica": [{"nome": "Tubulação", "fase": "9. Instalações Hidrossanitárias e Gás"}, {"nome": "Teste Estanqueidade", "fase": "9. Instalações Hidrossanitárias e Gás"}, {"nome": "Fechamento", "fase": "9. Instalações Hidrossanitárias e Gás"}],
+            "Telhado Colonial": [{"nome": "Madeiramento (Tesouras/Terças)", "fase": "7. Coberturas e Impermeabilizações"}, {"nome": "Assentamento de Telhas", "fase": "7. Coberturas e Impermeabilizações"}, {"nome": "Cumeeira e Rufos", "fase": "7. Coberturas e Impermeabilizações"}]
         }
         kit_sel = st.selectbox("Sistema Construtivo:", list(kits.keys()))
-        
         with st.form("form_kit"):
             dt_ini = st.date_input("Início da 1ª Etapa")
             cols = st.columns(len(kits[kit_sel]))
@@ -375,15 +440,13 @@ with aba3:
                     st.markdown(f"**{etp['nome']}**")
                     dias_lst.append(st.number_input("Dias", 1, 100, 2, key=f"k_d_{i}"))
                     custo_lst.append(st.number_input("Custo R$", 0.0, format="%.2f", key=f"k_c_{i}"))
-            
-            pai_m = st.selectbox("Pertence a qual Macro-etapa?", options=list(opcoes_parent.keys()), format_func=lambda x: opcoes_parent[x])
-            dep_m = st.selectbox("A 1ª etapa depende de quem?", options=list(opcoes_dep.keys()), format_func=lambda x: opcoes_dep[x])
+            pai_m = st.selectbox("Pertence a qual Macro?", options=list(opcoes_parent.keys()), format_func=lambda x: opcoes_parent[x])
+            dep_m = st.selectbox("Depende de quem?", options=list(opcoes_dep.keys()), format_func=lambda x: opcoes_dep[x])
             
             if st.form_submit_button("🚀 Gerar Cascata"):
                 curr_date = dt_ini
                 curr_dep = None if dep_m == 0 else dep_m
                 val_pai = None if pai_m == 0 else pai_m
-                
                 with conn.session as s:
                     for i, etp in enumerate(kits[kit_sel]):
                         fim_calc = add_bus_days(curr_date, dias_lst[i] - 1)
@@ -391,35 +454,27 @@ with aba3:
                             INSERT INTO tarefas (nome_servico, fase, data_inicio, data_fim, conclusao_percentual, custo_previsto, dependencia_id, obra_id, parent_id, tipo_dep, lag_dias) 
                             VALUES (:n, :f, :i, :fim, 0, :c, :d, :ob, :pa, 'TI', 0) RETURNING id
                         """), {"n": etp['nome'], "f": etp['fase'], "i": curr_date, "fim": fim_calc, "c": custo_lst[i], "d": curr_dep, "ob": int(obra_ativa_id), "pa": val_pai})
-                        
                         curr_dep = res.scalar()
                         curr_date = add_bus_days(fim_calc, 1)
                     s.commit()
-                st.success("Kit gerado! Vá na Aba 1 e Recalcule o CPM.")
+                st.rerun()
                 
     else:
-        st.write("Adicione tarefas isoladas com regras complexas de dependência e Lags.")
         with st.form("form_manual_unico"):
-            n = st.text_input("Nome da Tarefa/Etapa")
+            n = st.text_input("Nome")
             f = st.selectbox("Fase", FASES_DA_OBRA)
-            
             c_pai, c_cst = st.columns(2)
-            pai = c_pai.selectbox("Pertence à qual Macro-etapa?", options=list(opcoes_parent.keys()), format_func=lambda x: opcoes_parent[x])
+            pai = c_pai.selectbox("Macro-etapa?", options=list(opcoes_parent.keys()), format_func=lambda x: opcoes_parent[x])
             cst = c_cst.number_input("Custo Previsto (R$)", min_value=0.0)
-            
             c_i, c_f = st.columns(2)
-            i = c_i.date_input("Início Planejado")
-            fm = c_f.date_input("Término Planejado")
-            
-            st.write("**Dependências Lógicas**")
+            i, fm = c_i.date_input("Início"), c_f.date_input("Término")
             c1, c2, c3 = st.columns(3)
             dep = c1.selectbox("Depende de?", options=list(opcoes_dep.keys()), format_func=lambda x: opcoes_dep[x])
             tipo = c2.selectbox("Tipo de Ligação", ["TI (Término-Início)", "II (Início-Início)"])
-            lag = c3.number_input("Lag/Espera (Dias)", value=0)
+            lag = c3.number_input("Lag (Dias)", value=0)
             
             if st.form_submit_button("Inserir no Cronograma"):
-                if i > fm:
-                    st.error("O Início não pode ser maior que o Término!")
+                if i > fm: st.error("Erro nas datas!")
                 else:
                     with conn.session as s:
                         s.execute(text("""
@@ -427,4 +482,4 @@ with aba3:
                             VALUES (:n, :f, :i, :fim, 0, :c, :ob, :pa, :d, :td, :lag)
                         """), {"n": n, "f": f, "i": i, "fim": fm, "c": cst, "ob": int(obra_ativa_id), "pa": None if pai==0 else pai, "d": None if dep==0 else dep, "td": tipo[:2], "lag": lag})
                         s.commit()
-                    st.success("Tarefa Inserida! Vá a Aba 1 e clique em Recalcular Cronograma (CPM).")
+                    st.rerun()
