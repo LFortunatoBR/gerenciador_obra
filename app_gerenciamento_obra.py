@@ -222,7 +222,7 @@ if obra_ativa_id == 0:
 # ==========================================
 # OBRA SELECIONADA
 # ==========================================
-st.title(f"🏗️️ {obras_dict[obra_ativa_id]}")
+st.title(f"🏗️ {obras_dict[obra_ativa_id]}")
 
 df_tarefas = conn.query("SELECT * FROM tarefas WHERE obra_id = :oid ORDER BY data_inicio, id;", params={"oid": int(obra_ativa_id)}, ttl=0)
 opcoes_dep, opcoes_parent = {0: "Nenhuma"}, {0: "Nenhuma (É Macro-etapa raiz)"}
@@ -265,17 +265,36 @@ with aba1:
         df_tarefas['data_inicio'] = pd.to_datetime(df_tarefas['data_inicio']).dt.date
         df_tarefas['data_fim'] = pd.to_datetime(df_tarefas['data_fim']).dt.date
         
-        altura_app = max(400, len(df_tarefas) * 35)
+        # --- GRÁFICO INTERATIVO NO APP (Mais compacto verticalmente, barras finas e linhas horizontais) ---
+        altura_app = max(400, len(df_tarefas) * 25) # Reduzido o multiplicador de 35 para 25 para compactar
         fig = px.timeline(df_tarefas, x_start="data_inicio", x_end="data_fim", y="nome_servico", color="fase", color_discrete_map=CORES_FASES, title="Evolução Lógica")
+        
         fig.update_yaxes(autorange="reversed")
+        
+        # Reduz a espessura das barras
+        fig.update_traces(width=0.5) 
+        
+        # Adiciona as linhas guias verticais E horizontais
         fig.update_layout(
-            height=altura_app, margin=dict(l=0, r=0, t=30, b=0),
-            xaxis=dict(dtick=604800000, tickformat="%d/%m\n%Y", showgrid=True, gridcolor='rgba(128, 128, 128, 0.4)', gridwidth=1)
+            height=altura_app, 
+            margin=dict(l=0, r=0, t=30, b=0),
+            yaxis=dict(
+                showgrid=True, 
+                gridcolor='rgba(128, 128, 128, 0.2)' # Linha horizontal sutil entre os serviços
+            ),
+            xaxis=dict(
+                dtick=604800000, # Semanal
+                tickformat="%d/%m\n%Y", 
+                showgrid=True, 
+                gridcolor='rgba(128, 128, 128, 0.4)',
+                gridwidth=1
+            )
         )
         st.plotly_chart(fig, use_container_width=True)
         
         st.subheader("📋 Estrutura Analítica (EAP)")
         df_exib_rows = []
+        
         fases_presentes = sorted(df_tarefas['fase'].unique(), key=lambda x: FASES_DA_OBRA.index(x) if x in FASES_DA_OBRA else 999)
         ordem_exibicao_grafico = [] 
         
@@ -309,32 +328,35 @@ with aba1:
                 import matplotlib.patches as mpatches
                 
                 df_graf_ordenado = pd.DataFrame(ordem_exibicao_grafico)
-                altura_grafico = max(6, len(df_tarefas) * 0.35)
+                
+                # Compacta a altura do gráfico gerado no PDF
+                altura_grafico = max(5, len(df_tarefas) * 0.25) 
                 fig_pdf, ax = plt.subplots(figsize=(20, altura_grafico), dpi=150)
                 
                 for idx, row in df_graf_ordenado.iterrows():
                     cor_barra = CORES_FASES.get(row['fase'], "#b0bec5")
-                    ax.barh(row['nome'], mdates.date2num(row['fim']) - mdates.date2num(row['inicio']), left=mdates.date2num(row['inicio']), color=cor_barra, edgecolor='black', linewidth=0.5)
+                    # height=0.5 afina a barra no PDF
+                    ax.barh(row['nome'], mdates.date2num(row['fim']) - mdates.date2num(row['inicio']), left=mdates.date2num(row['inicio']), height=0.5, color=cor_barra, edgecolor='black', linewidth=0.5)
                 
+                # Grids Verticais (Semanas) e Horizontais (Serviços)
                 ax.xaxis.set_major_locator(mdates.WeekdayLocator(byweekday=mdates.MO)) 
                 ax.xaxis.set_major_formatter(mdates.DateFormatter('%d/%m/%Y'))
                 ax.grid(axis='x', color='gray', linestyle='--', linewidth=0.5, alpha=0.7)
+                ax.grid(axis='y', color='gray', linestyle=':', linewidth=0.5, alpha=0.4) # Grid Horizontal
                 
-                # ADICIONA MARGEM INTERNA PARA NÃO COLAR NAS BORDAS DO GRÁFICO
                 ax.margins(x=0.03)
-                
                 plt.xticks(rotation=45, ha='right', fontsize=9); plt.yticks(fontsize=9)
                 
                 fases_unicas = df_graf_ordenado['fase'].unique()
                 patches = [mpatches.Patch(color=CORES_FASES.get(f, "#b0bec5"), label=f) for f in fases_unicas]
                 ax.legend(handles=patches, bbox_to_anchor=(1.02, 1), loc='upper left', fontsize=8, title="Fases (EAP)")
                 
-                # FIX DO CORTE: bbox_inches='tight' garante que legenda não fique fora da imagem salva
                 caminho_img = "gantt_temp.png"
                 plt.savefig(caminho_img, bbox_inches='tight'); plt.close(fig_pdf)
 
                 pdf = FPDF(unit="mm", format="A3")
                 
+                # PÁGINA 1: GANTT (A3 PAISAGEM)
                 pdf.add_page(orientation="L")
                 pdf.set_font("Arial", "B", 18)
                 pdf.set_fill_color(41, 128, 185); pdf.set_text_color(255, 255, 255)
@@ -346,6 +368,7 @@ with aba1:
                 pdf.cell(400, 10, remover_acentos(titulo_valor.replace(",", "X").replace(".", ",").replace("X", ".")), ln=True, align="C")
                 pdf.image(caminho_img, x=5, w=410); pdf.ln(5)
                 
+                # PÁGINAS 2+: TABELA EAP (A3 RETRATO)
                 pdf.add_page(orientation="P")
                 pdf.set_font("Arial", "B", 16); pdf.set_text_color(40, 40, 40)
                 pdf.cell(277, 10, "Estrutura Analitica do Projeto (EAP)", ln=True, align="C")
