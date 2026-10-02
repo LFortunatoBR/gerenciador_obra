@@ -374,11 +374,16 @@ with aba3:
                 {"nome": "Tubulação/Eletrodutos", "fase": "10. Instalações Elétricas, Lógicas e SPDA"}, 
                 {"nome": "Enfiação/Cabeamento", "fase": "10. Instalações Elétricas, Lógicas e SPDA"}, 
                 {"nome": "Fechamento (Tomadas/Interruptores)", "fase": "10. Instalações Elétricas, Lógicas e SPDA"}
-            ],
+            ],            
             "Instalações Hidráulicas": [
                 {"nome": "Rasgos e Tubulação", "fase": "9. Instalações Hidrossanitárias e Gás"}, 
                 {"nome": "Teste de Estanqueidade", "fase": "9. Instalações Hidrossanitárias e Gás"}, 
                 {"nome": "Fechamento de Rasgos", "fase": "9. Instalações Hidrossanitárias e Gás"}
+            ],
+            "Telhado Colonial": [
+                {"nome": "Madeiramento (Tesouras/Terças)", "fase": "7. Coberturas e Impermeabilizações"},
+                {"nome": "Assentamento de Telhas", "fase": "7. Coberturas e Impermeabilizações"},
+                {"nome": "Cumeeira e Rufos", "fase": "7. Coberturas e Impermeabilizações"}
             ]
         }
         kit_sel = st.selectbox("Sistema Construtivo:", list(kits.keys()))
