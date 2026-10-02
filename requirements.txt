@@ -4,3 +4,4 @@ plotly
 SQLAlchemy
 psycopg2-binary
 fpdf
+matplotlib
