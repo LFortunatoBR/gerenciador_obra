@@ -263,7 +263,7 @@ with aba2:
     if busca:
         tabela_alvo = "sinapi_composicoes" if "Serviços" in tipo_busca else "sinapi_insumos"
         query = f"SELECT codigo, descricao, unidade, preco_mediano FROM {tabela_alvo} WHERE descricao ILIKE :termo LIMIT 15;"
-df_sinapi = conn.query(query, params={"termo": f"%{busca}%"}, ttl=600)
+        df_sinapi = conn.query(query, params={"termo": f"%{busca}%"}, ttl=600)
         
         if not df_sinapi.empty:
             for index, row in df_sinapi.iterrows():
