@@ -10,8 +10,65 @@ from datetime import datetime, timedelta
 import pytz
 
 def remover_acentos(texto):
+    if pd.isna(texto): return ""
     return ''.join(c for c in unicodedata.normalize('NFD', str(texto)) if unicodedata.category(c) != 'Mn')
 
+# ==========================================
+# MOTOR DE TABELAS PDF (LINHAS AUTOMÁTICAS E CORES)
+# ==========================================
+def gerar_tabela_pdf(pdf, df, col_widths, col_names, base_x=10):
+    # Cabeçalho da Tabela
+    pdf.set_fill_color(41, 128, 185) # Azul Corporativo
+    pdf.set_text_color(255, 255, 255)
+    pdf.set_font("Arial", 'B', 9)
+    pdf.set_xy(base_x, pdf.get_y())
+    for name, w in zip(col_names, col_widths):
+        pdf.cell(w, 8, remover_acentos(name), border=0, fill=True, align='C')
+    pdf.ln(8)
+    
+    # Corpo da Tabela
+    pdf.set_text_color(40, 40, 40)
+    pdf.set_font("Arial", '', 8)
+    fill = False
+    
+    for idx, row in df.iterrows():
+        row_data = [remover_acentos(str(x)) for x in row.values]
+        
+        # Calcula quantas linhas o texto precisa (Quebra automática)
+        max_lines = 1
+        for text, w in zip(row_data, col_widths):
+            width_text = pdf.get_string_width(text)
+            lines = int(width_text / (w - 4)) + 1
+            if lines > max_lines: max_lines = lines
+        
+        line_height = 5
+        row_height = max_lines * line_height
+        
+        # Cria nova página se a tabela chegar ao fim da folha
+        if pdf.get_y() + row_height > 275:
+            pdf.add_page()
+            pdf.set_y(20) 
+            
+        y_start = pdf.get_y()
+        
+        # Fundo alternado (Efeito Zebra)
+        if fill:
+            pdf.set_fill_color(240, 245, 250)
+            pdf.rect(base_x, y_start, sum(col_widths), row_height, 'F')
+        
+        x_curr = base_x
+        for text, w in zip(row_data, col_widths):
+            pdf.set_xy(x_curr, y_start)
+            pdf.multi_cell(w, line_height, text, border=0, align='C')
+            x_curr += w
+        
+        # Linha inferior sutil
+        pdf.set_draw_color(200, 200, 200)
+        pdf.line(base_x, y_start + row_height, base_x + sum(col_widths), y_start + row_height)
+        pdf.set_xy(base_x, y_start + row_height)
+        fill = not fill
+
+# --- LISTAS E FUNÇÕES DO CPM ---
 FASES_DA_OBRA = [
     "1. Serviços Preliminares e Projetos", "2. Canteiro de Obras e Locação",
     "3. Movimento de Terra (Terraplenagem)", "4. Fundações e Contenções",
@@ -51,8 +108,7 @@ def rodar_motor_cpm(conn, obra_id):
                 if t['dependencia_id']:
                     pred = t_dict.get(t['dependencia_id'])
                     if pred:
-                        lag = t['lag_dias'] or 0
-                        tipo = t['tipo_dep'] or 'TI'
+                        lag = t['lag_dias'] or 0; tipo = t['tipo_dep'] or 'TI'
                         nova_ini = t['data_inicio']
                         if tipo == 'TI': nova_ini = add_bus_days(pred['data_fim'], lag + 1)
                         elif tipo == 'II': nova_ini = add_bus_days(pred['data_inicio'], lag)
@@ -75,6 +131,9 @@ def rodar_motor_cpm(conn, obra_id):
             s.execute(text("UPDATE tarefas SET data_inicio=:i, data_fim=:f, custo_previsto=:c, conclusao_percentual=:p WHERE id=:id"), {"i": t['data_inicio'], "f": t['data_fim'], "c": float(t['custo_previsto'] or 0), "p": int(t['conclusao_percentual'] or 0), "id": t_id})
         s.commit()
 
+# ==========================================
+# SETUP DA PÁGINA E CONEXÃO
+# ==========================================
 st.set_page_config(page_title="ERP Obras", page_icon="🏗", layout="wide")
 
 def check_password():
@@ -90,21 +149,18 @@ if not check_password(): st.stop()
 
 url_correta = st.secrets["DATABASE_URL"].replace("postgresql://", "postgresql+psycopg2://")
 conn = st.connection("postgresql", type="sql", url=url_correta, pool_pre_ping=True, pool_recycle=300)
-
 fuso_brasil = pytz.timezone('America/Sao_Paulo')
 hoje = datetime.now(fuso_brasil).date()
 
 # ==========================================
-# BARRA LATERAL (SELEÇÃO DE OBRAS)
+# BARRA LATERAL
 # ==========================================
 with st.sidebar:
     st.header("🏢 Diretoria & Projetos")
     try: df_obras = conn.query("SELECT * FROM obras ORDER BY id;", ttl=0)
     except: st.error("Rode o SQL no Neon!"); st.stop()
         
-    obra_ativa_id = 0
-    taxa_bdi = 0.0
-    
+    obra_ativa_id, taxa_bdi = 0, 0.0
     obras_dict = {0: "🌐 VISÃO GLOBAL (DASHBOARD)"}
     if not df_obras.empty:
         obras_dict.update(dict(zip(df_obras['id'], df_obras['nome'])))
@@ -121,61 +177,33 @@ with st.sidebar:
                     s.execute(text("UPDATE obras SET nome = :n, bdi = :b WHERE id = :id"), {"n": novo_nome, "b": novo_bdi, "id": int(obra_ativa_id)})
                     s.commit()
                 st.rerun()
-            st.divider()
-            if st.button("🗑️ Excluir Projeto"):
-                with conn.session as s:
-                    s.execute(text("DELETE FROM obras WHERE id = :id"), {"id": int(obra_ativa_id)})
-                    s.commit()
-                st.rerun()
-                
     st.divider()
     with st.form("nova_obra"):
-        nova = st.text_input("Novo Projeto")
-        if st.form_submit_button("Criar") and nova:
-            with conn.session as s:
-                s.execute(text("INSERT INTO obras (nome) VALUES (:n)"), {"n": nova}); s.commit()
+        if st.form_submit_button("Criar Nova Obra") and (nova := st.text_input("Novo Projeto")):
+            with conn.session as s: s.execute(text("INSERT INTO obras (nome) VALUES (:n)"), {"n": nova}); s.commit()
             st.rerun()
 
-# ==========================================
-# DASHBOARD GLOBAL DA DIRETORIA
-# ==========================================
 if obra_ativa_id == 0:
     st.title("🌐 Dashboard Global da Diretoria")
-    st.write("Visão consolidada de todos os projetos ativos da construtora.")
-    
     df_all_tarefas = conn.query("SELECT t.obra_id, t.custo_previsto, t.conclusao_percentual, t.parent_id, o.nome, o.bdi FROM tarefas t JOIN obras o ON t.obra_id = o.id WHERE t.parent_id IS NULL;", ttl=0)
-    
     if not df_all_tarefas.empty:
-        # Agrupa os dados por obra
         resumo = []
         for o_id in df_all_tarefas['obra_id'].unique():
             df_o = df_all_tarefas[df_all_tarefas['obra_id'] == o_id]
-            nome_ob = df_o.iloc[0]['nome']
-            bdi_ob = float(df_o.iloc[0]['bdi'])
-            c_tot = df_o['custo_previsto'].sum()
-            v_tot = c_tot * (1 + (bdi_ob/100))
+            c_tot = df_o['custo_previsto'].sum(); v_tot = c_tot * (1 + (float(df_o.iloc[0]['bdi'])/100))
             conc_med = sum(df_o['conclusao_percentual'] * df_o['custo_previsto']) / c_tot if c_tot > 0 else 0
-            resumo.append({"Obra": nome_ob, "Custo Total": c_tot, "Preço Venda": v_tot, "Avanço Físico (%)": conc_med})
-            
+            resumo.append({"Obra": df_o.iloc[0]['nome'], "Custo Total": c_tot, "Preço Venda": v_tot, "Avanço Físico (%)": conc_med})
         df_resumo = pd.DataFrame(resumo)
-        
         c1, c2, c3 = st.columns(3)
-        c1.metric("Carteira Total (VGV)", f"R$ {df_resumo['Preço Venda'].sum():,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
-        c2.metric("Custo Físico Total", f"R$ {df_resumo['Custo Total'].sum():,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
-        lucro_bruto = df_resumo['Preço Venda'].sum() - df_resumo['Custo Total'].sum()
-        c3.metric("Lucro Bruto Projetado", f"R$ {lucro_bruto:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
-        
-        fig_dash = px.bar(df_resumo, x="Obra", y="Avanço Físico (%)", text="Avanço Físico (%)", title="Avanço Físico por Obra", color="Avanço Físico (%)", color_continuous_scale="RdYlGn", range_y=[0, 100])
-        fig_dash.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
+        c1.metric("Carteira Total (VGV)", f"R$ {df_resumo['Preço Venda'].sum():,.2f}")
+        c2.metric("Custo Físico Total", f"R$ {df_resumo['Custo Total'].sum():,.2f}")
+        c3.metric("Lucro Bruto Projetado", f"R$ {(df_resumo['Preço Venda'].sum() - df_resumo['Custo Total'].sum()):,.2f}")
+        fig_dash = px.bar(df_resumo, x="Obra", y="Avanço Físico (%)", text="Avanço Físico (%)", color="Avanço Físico (%)", color_continuous_scale="RdYlGn", range_y=[0, 100])
         st.plotly_chart(fig_dash, use_container_width=True)
-        
-        st.dataframe(df_resumo, column_config={"Custo Total": st.column_config.NumberColumn(format="R$ %.2f"), "Preço Venda": st.column_config.NumberColumn(format="R$ %.2f"), "Avanço Físico (%)": st.column_config.ProgressColumn(format="%.1f%%", min_value=0, max_value=100)}, hide_index=True, use_container_width=True)
-    else:
-        st.info("Nenhuma tarefa registada em nenhum projeto ainda.")
-    st.stop() # Para a execução aqui. As abas individuais só abrem se selecionar uma obra.
+    st.stop()
 
 # ==========================================
-# GESTÃO DA OBRA SELECIONADA
+# OBRA SELECIONADA
 # ==========================================
 st.title(f"🏗️ {obras_dict[obra_ativa_id]}")
 
@@ -189,7 +217,7 @@ if not df_tarefas.empty:
 
 aba1, aba2, aba3, aba4, aba5, aba6, aba7 = st.tabs(["📊 Gantt & EAP", "📈 Curva S (Medição)", "💸 Financeiro", "🛒 Insumos (Curva ABC)", "📖 RDO", "💰 SINAPI", "⚙️ Planejar"])
 
-# --- ABA 1: GANTT, EAP E PDF ---
+# --- ABA 1: GANTT E ATUALIZAÇÃO ---
 with aba1:
     col_met1, col_met2, col_btn = st.columns([2, 2, 1])
     df_top_level = df_tarefas[df_tarefas['parent_id'].isna()]
@@ -200,139 +228,105 @@ with aba1:
     col_met2.metric(f"Preço de Venda (BDI {taxa_bdi}%)", f"R$ {preco_venda:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
     if col_btn.button("🔄 Recalcular CPM", type="primary", use_container_width=True):
         rodar_motor_cpm(conn, int(obra_ativa_id)); st.rerun()
+        
+    with st.expander("📝 Atualizar Progresso ou Ajustar Prazos (Atrasos/Antecipações)", expanded=False):
+        t_edit = df_tarefas[df_tarefas['parent_id'].notna() | (df_tarefas['parent_id'].isna() & df_tarefas['dependencia_id'].notna())]
+        if not t_edit.empty:
+            t_id = st.selectbox("Selecione o Serviço:", t_edit['id'], format_func=lambda x: t_edit[t_edit['id']==x]['nome_servico'].values[0])
+            t_row = t_edit[t_edit['id'] == t_id].iloc[0]
+            c_perc, c_data = st.columns(2)
+            n_perc = c_perc.slider("Conclusão (%)", 0, 100, int(t_row['conclusao_percentual']))
+            n_data = c_data.date_input("Nova Data de Término", value=t_row['data_fim'])
+            if st.button("💾 Salvar Atualização e Recalcular", type="secondary"):
+                with conn.session as s:
+                    s.execute(text("UPDATE tarefas SET conclusao_percentual = :p, data_fim = :df WHERE id = :id"), {"p": n_perc, "df": n_data, "id": int(t_id)})
+                    s.commit()
+                rodar_motor_cpm(conn, int(obra_ativa_id))
+                st.rerun()
 
     if not df_tarefas.empty:
         df_tarefas['data_inicio'] = pd.to_datetime(df_tarefas['data_inicio']).dt.date
         df_tarefas['data_fim'] = pd.to_datetime(df_tarefas['data_fim']).dt.date
         
-        df_tarefas['plot_ini'] = pd.to_datetime(df_tarefas['data_inicio'])
-        df_tarefas['plot_fim'] = pd.to_datetime(df_tarefas['data_fim'])
-        fig = px.timeline(df_tarefas, x_start="plot_ini", x_end="plot_fim", y="nome_servico", color="fase", title="Evolução Lógica")
+        fig = px.timeline(df_tarefas, x_start="data_inicio", x_end="data_fim", y="nome_servico", color="fase", title="Evolução Lógica")
         fig.update_yaxes(autorange="reversed"); fig.update_layout(height=400, margin=dict(l=0, r=0, t=30, b=0))
         st.plotly_chart(fig, use_container_width=True)
-        # --- PAINEL DE ATUALIZAÇÃO (PERCENTUAL E ATRASOS) ---
-        with st.expander("📝 Atualizar Progresso ou Ajustar Prazos (Atrasos/Antecipações)", expanded=False):
-            # Filtra apenas as tarefas reais (exclui as Macro-etapas/Pastas)
-            tarefas_editaveis = df_tarefas[df_tarefas['parent_id'].notna() | (df_tarefas['parent_id'].isna() & df_tarefas['dependencia_id'].notna())]
-            
-            if not tarefas_editaveis.empty:
-                t_id = st.selectbox("Selecione o Serviço:", tarefas_editaveis['id'], format_func=lambda x: tarefas_editaveis[tarefas_editaveis['id']==x]['nome_servico'].values[0])
-                t_row = tarefas_editaveis[tarefas_editaveis['id'] == t_id].iloc[0]
-                
-                c_perc, c_data = st.columns(2)
-                novo_perc = c_perc.slider("Percentual de Conclusão (%)", 0, 100, int(t_row['conclusao_percentual']))
-                nova_data_fim = c_data.date_input("Nova Data de Término (Em caso de atraso/antecipação)", value=t_row['data_fim'])
-                
-                if st.button("💾 Salvar Atualização", type="secondary"):
-                    with conn.session as s:
-                        s.execute(text("UPDATE tarefas SET conclusao_percentual = :p, data_fim = :df WHERE id = :id"), 
-                                  {"p": novo_perc, "df": nova_data_fim, "id": int(t_id)})
-                        s.commit()
-                    st.success("Atualizado! Agora clique no botão vermelho 'Recalcular CPM' lá em cima para ajustar a obra toda.")
-                    st.rerun()
-        
-        st.subheader("📋 Estrutura Analítica (EAP)")
-        df_exib_rows = []
-        fases_presentes = sorted(df_tarefas['fase'].unique(), key=lambda x: FASES_DA_OBRA.index(x) if x in FASES_DA_OBRA else 999)
-        
-        for fase in fases_presentes:
-            df_fase = df_tarefas[df_tarefas['fase'] == fase]
-            for _, row in df_fase.iterrows():
-                df_exib_rows.append({
-                    "id": row['id'], "Serviço": ("  ↳ " if pd.notna(row['parent_id']) else "📦 ") + row['nome_servico'],
-                    "Início": pd.to_datetime(row['data_inicio']).strftime('%d/%m/%Y'), "Fim": pd.to_datetime(row['data_fim']).strftime('%d/%m/%Y'),
-                    "Conc. %": row['conclusao_percentual'], "Custo (R$)": row['custo_previsto'], "Venda (R$)": float(row['custo_previsto']) * (1 + (taxa_bdi/100))
-                })
-            t_custo = df_fase[df_fase['parent_id'].isna()]['custo_previsto'].sum()
-            df_exib_rows.append({"id": None, "Serviço": f"➤ SUBTOTAL: {fase.upper()}", "Início": "", "Fim": "", "Conc. %": None, "Custo (R$)": t_custo, "Venda (R$)": t_custo * (1 + (taxa_bdi/100))})
-            
-        df_exib_rows.append({"id": None, "Serviço": "⭐ TOTAL GERAL", "Início": "", "Fim": "", "Conc. %": None, "Custo (R$)": custo_total, "Venda (R$)": preco_venda})
-        df_exib = pd.DataFrame(df_exib_rows)
-        st.dataframe(df_exib, column_config={"id": None, "Custo (R$)": st.column_config.NumberColumn(format="R$ %.2f"), "Venda (R$)": st.column_config.NumberColumn(format="R$ %.2f")}, hide_index=True, use_container_width=True)
-
-        st.divider()
-        c_pdf1, c_pdf2 = st.columns(2)
-        tipo_pdf = "interno" if c_pdf1.button("🔒 Gerar PDF Interno (Custos)") else ("cliente" if c_pdf2.button("💼 Gerar PDF Cliente (Venda)") else None)
-            
-        if tipo_pdf:
-            import matplotlib.pyplot as plt
-            import matplotlib.dates as mdates
-            fig_pdf, ax = plt.subplots(figsize=(10, 4), dpi=150)
-            for idx, row in df_tarefas.copy().sort_values(by='data_inicio', ascending=False).iterrows():
-                ax.barh(row['nome_servico'], mdates.date2num(row['plot_fim']) - mdates.date2num(row['plot_ini']), left=mdates.date2num(row['plot_ini']), color="#b0bec5", edgecolor='black')
-            ax.xaxis_date(); ax.xaxis.set_major_formatter(mdates.DateFormatter('%d/%m/%Y'))
-            plt.xticks(rotation=45, ha='right', fontsize=8); plt.yticks(fontsize=8); plt.tight_layout()
-            caminho_img = "gantt_temp.png"
-            plt.savefig(caminho_img); plt.close(fig_pdf)
-
-            pdf = FPDF(orientation="L", unit="mm", format="A4")
-            pdf.add_page(); pdf.set_font("Arial", "B", 16)
-            pdf.cell(270, 10, remover_acentos(f"Cronograma Oficial - {obras_dict[obra_ativa_id]}"), ln=True, align="C")
-            pdf.set_font("Arial", "", 12)
-            titulo_v = f"Custo Estimado: R$ {custo_total:,.2f}" if tipo_pdf == "interno" else f"Preco de Venda: R$ {preco_venda:,.2f}"
-            pdf.cell(270, 10, remover_acentos(titulo_v.replace(",", "X").replace(".", ",").replace("X", ".")), ln=True, align="C")
-            pdf.image(caminho_img, x=20, w=250); pdf.ln(5)
-            
-            pdf.set_font("Arial", "B", 8)
-            cn = "Custo" if tipo_pdf == "interno" else "Valor"
-            for header, w in zip(["Servico", "Inicio", "Termino", "Conc.", cn], [120, 30, 30, 20, 40]):
-                pdf.cell(w, 8, header, 1, ln=(header==cn))
-            
-            pdf.set_font("Arial", "", 8)
-            for _, row in df_exib.iterrows():
-                if row['id'] is not None:
-                    v = row['Custo (R$)'] if tipo_pdf == "interno" else row['Venda (R$)']
-                    pdf.cell(120, 8, remover_acentos(str(row['Serviço']))[:70], 1)
-                    pdf.cell(30, 8, str(row['Início']), 1); pdf.cell(30, 8, str(row['Fim']), 1); pdf.cell(20, 8, f"{row['Conc. %']}%", 1)
-                    pdf.cell(40, 8, f"R$ {float(v):,.2f}".replace(",", "X").replace(".", ",").replace("X", "."), 1, ln=True)
-            
-            pdf.output("relatorio.pdf")
-            with open("relatorio.pdf", "rb") as f: st.session_state['pdf_pronto'] = f.read()
-            try: os.remove(caminho_img)
-            except: pass
-
-        if 'pdf_pronto' in st.session_state:
-            st.download_button("⬇️ Baixar PDF", data=st.session_state['pdf_pronto'], file_name="Cronograma.pdf", mime="application/pdf")
 
 # --- ABA 2: CURVA S E MEDIÇÃO ---
 with aba2:
     st.header("📈 Medição e Curva S")
     df_base = df_tarefas[df_tarefas['base_inicio'].notna()].copy()
     
+    if st.button("📄 Gerar PDF da Curva S e Medição"):
+        with st.spinner("Gerando PDF da Curva S..."):
+            import matplotlib.pyplot as plt
+            import matplotlib.dates as mdates
+            
+            pdf = FPDF(orientation="L", unit="mm", format="A4")
+            pdf.add_page()
+            pdf.set_fill_color(41, 128, 185); pdf.set_text_color(255, 255, 255); pdf.set_font("Arial", "B", 16)
+            pdf.cell(277, 12, remover_acentos(f"Relatorio de Medicao e Curva S - {obras_dict[obra_ativa_id]}"), ln=True, align="C", fill=True)
+            pdf.ln(5)
+
+            if not df_base.empty:
+                min_d, max_d = df_base['base_inicio'].min(), df_base['base_fim'].max()
+                datas_g = [min_d + timedelta(days=x) for x in range((max_d - min_d).days + 1)]
+                pv_acumulado, acc = [], 0
+                for d in datas_g:
+                    c_dia = 0
+                    if d.weekday() < 5: 
+                        for _, r in df_base.iterrows():
+                            if r['base_inicio'] <= d <= r['base_fim']:
+                                c_dia += (float(r['base_custo']) * (1 + (taxa_bdi/100))) / (bus_days_between(r['base_inicio'], r['base_fim']) + 1)
+                    acc += c_dia; pv_acumulado.append(acc)
+                
+                ev_venda = sum(float(r['custo_previsto']) * (1 + (taxa_bdi/100)) * (r['conclusao_percentual']/100) for _, r in df_tarefas.iterrows())
+                
+                # Gera Gráfico para o PDF
+                fig_s_pdf, ax = plt.subplots(figsize=(10, 4), dpi=150)
+                ax.plot(datas_g, pv_acumulado, color='#2980b9', linewidth=2, label='Planejado')
+                ax.plot([hoje], [ev_venda], marker='*', color='#27ae60', markersize=15, label='Executado (Hoje)')
+                ax.xaxis.set_major_formatter(mdates.DateFormatter('%d/%m/%Y'))
+                plt.xticks(rotation=45, ha='right', fontsize=8); plt.grid(True, linestyle='--', alpha=0.6); plt.legend()
+                plt.tight_layout()
+                plt.savefig('scurve_temp.png'); plt.close(fig_s_pdf)
+                
+                pdf.image('scurve_temp.png', x=15, w=260)
+                pdf.ln(5)
+                
+                df_med = conn.query("SELECT * FROM medicoes WHERE obra_id = :oid", params={"oid": int(obra_ativa_id)}, ttl=0)
+                faturado = df_med['valor_medido'].sum() if not df_med.empty else 0.0
+                
+                pdf.set_font("Arial", "B", 12); pdf.set_text_color(40,40,40)
+                pdf.cell(90, 10, remover_acentos(f"Executado (Preco Venda): R$ {ev_venda:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")), border=1, align="C")
+                pdf.cell(90, 10, remover_acentos(f"Ja Faturado: R$ {faturado:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")), border=1, align="C")
+                pdf.cell(90, 10, remover_acentos(f"Saldo para Medicao: R$ {max(0, ev_venda - faturado):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")), border=1, align="C")
+                
+                pdf.output("relatorio_medicao.pdf")
+                with open("relatorio_medicao.pdf", "rb") as f: st.download_button("⬇️ Baixar PDF (Curva S)", data=f.read(), file_name="CurvaS_Medicao.pdf", mime="application/pdf")
+                try: os.remove('scurve_temp.png')
+                except: pass
+            else:
+                st.error("Salve a Baseline primeiro para gerar o PDF!")
+
     col_curva, col_med = st.columns([2, 1])
     with col_curva:
         if not df_base.empty:
-            min_d, max_d = df_base['base_inicio'].min(), df_base['base_fim'].max()
-            datas_g = [min_d + timedelta(days=x) for x in range((max_d - min_d).days + 1)]
-            pv_acumulado, acc = [], 0
-            for d in datas_g:
-                c_dia = 0
-                if d.weekday() < 5: 
-                    for _, r in df_base.iterrows():
-                        if r['base_inicio'] <= d <= r['base_fim']:
-                            c_dia += (float(r['base_custo']) * (1 + (taxa_bdi/100))) / (bus_days_between(r['base_inicio'], r['base_fim']) + 1)
-                acc += c_dia; pv_acumulado.append(acc)
-                
             fig_s = go.Figure()
             fig_s.add_trace(go.Scatter(x=datas_g, y=pv_acumulado, mode='lines', name='Planejado (Venda)', line=dict(color='blue', width=4)))
-            ev_tot = sum(float(r['base_custo']) * (1 + (taxa_bdi/100)) * (r['conclusao_percentual']/100) for _, r in df_base.iterrows() if pd.notna(r['base_custo']))
-            fig_s.add_trace(go.Scatter(x=[hoje], y=[ev_tot], mode='markers', name='Executado (EV)', marker=dict(color='green', size=15, symbol='star')))
+            fig_s.add_trace(go.Scatter(x=[hoje], y=[ev_venda], mode='markers', name='Executado (EV)', marker=dict(color='green', size=15, symbol='star')))
             st.plotly_chart(fig_s, use_container_width=True)
         else:
-            st.warning("⚠️ Salve a Linha de Base para ativar a Curva S.")
             if st.button("📸 Salvar Baseline (Fotografia do Planejamento)"):
                 with conn.session as s:
                     s.execute(text("UPDATE tarefas SET base_inicio=data_inicio, base_fim=data_fim, base_custo=custo_previsto WHERE obra_id=:oid"), {"oid": int(obra_ativa_id)})
-                    s.commit()
-                st.rerun()
+                    s.commit(); st.rerun()
 
     with col_med:
-        st.subheader("🧾 Fechamento Mensal")
         ev_venda = sum(float(r['custo_previsto']) * (1 + (taxa_bdi/100)) * (r['conclusao_percentual']/100) for _, r in df_tarefas.iterrows())
         df_med = conn.query("SELECT * FROM medicoes WHERE obra_id = :oid ORDER BY data_medicao", params={"oid": int(obra_ativa_id)}, ttl=0)
         faturado = df_med['valor_medido'].sum() if not df_med.empty else 0.0
         saldo = ev_venda - faturado
-        
         st.metric("Executado (Preço Venda)", f"R$ {ev_venda:,.2f}")
         st.metric("Já Faturado (Recebido)", f"R$ {faturado:,.2f}")
         st.metric("Saldo Liberado para Cobrança", f"R$ {max(0, saldo):,.2f}")
@@ -341,10 +335,9 @@ with aba2:
             with conn.session as s:
                 s.execute(text("INSERT INTO medicoes (obra_id, data_medicao, valor_medido, percentual_obra) VALUES (:o, :d, :v, :p)"), 
                           {"o": int(obra_ativa_id), "d": hoje, "v": float(saldo), "p": (ev_venda/preco_venda)*100 if preco_venda>0 else 0})
-                s.commit()
-            st.rerun()
+                s.commit(); st.rerun()
 
-# --- ABA 3: FLUXO DE CAIXA (FINANCEIRO) ---
+# --- ABA 3: FLUXO DE CAIXA ---
 with aba3:
     st.header("💸 Controle de Caixa (Financeiro)")
     c_f1, c_f2 = st.columns([1, 2])
@@ -360,76 +353,94 @@ with aba3:
                 with conn.session as s:
                     s.execute(text("INSERT INTO financeiro (obra_id, tipo, descricao, valor, data_vencimento, status) VALUES (:o, :t, :d, :v, :dt, :s)"),
                               {"o": int(obra_ativa_id), "t": f_tipo, "d": f_desc, "v": f_val, "dt": f_venc, "s": f_stat})
-                    s.commit()
-                st.rerun()
+                    s.commit(); st.rerun()
                 
     with c_f2:
         df_fin = conn.query("SELECT id, tipo, descricao, valor, data_vencimento, status FROM financeiro WHERE obra_id = :oid ORDER BY data_vencimento", params={"oid": int(obra_ativa_id)}, ttl=0)
         if not df_fin.empty:
+            rec_pago = df_fin[(df_fin['tipo']=='Receita') & (df_fin['status']=='Pago')]['valor'].sum()
+            des_pago = df_fin[(df_fin['tipo']=='Despesa') & (df_fin['status']=='Pago')]['valor'].sum()
+            st.metric("Saldo Real em Caixa (Recebido - Pago)", f"R$ {rec_pago - des_pago:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+            
+            if st.button("📄 Gerar PDF do Livro Caixa"):
+                pdf = FPDF(orientation="P", unit="mm", format="A4")
+                pdf.add_page()
+                pdf.set_fill_color(41, 128, 185); pdf.set_text_color(255, 255, 255); pdf.set_font("Arial", "B", 16)
+                pdf.cell(190, 12, remover_acentos(f"Controle de Caixa - {obras_dict[obra_ativa_id]}"), ln=True, align="C", fill=True)
+                pdf.ln(5)
+                
+                pdf.set_font("Arial", "B", 12); pdf.set_text_color(40,40,40)
+                pdf.cell(190, 8, remover_acentos(f"Saldo em Caixa: R$ {rec_pago - des_pago:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")), ln=True)
+                pdf.ln(5)
+                
+                df_pdf_fin = df_fin.drop(columns=['id']).copy()
+                df_pdf_fin['valor'] = df_pdf_fin['valor'].apply(lambda x: f"R$ {float(x):,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+                df_pdf_fin['data_vencimento'] = pd.to_datetime(df_pdf_fin['data_vencimento']).dt.strftime('%d/%m/%Y')
+                
+                gerar_tabela_pdf(pdf, df_pdf_fin, [25, 75, 35, 25, 25], ["Tipo", "Descricao", "Valor", "Vencimento", "Status"])
+                
+                pdf.output("relatorio_caixa.pdf")
+                with open("relatorio_caixa.pdf", "rb") as f: st.download_button("⬇️ Baixar PDF (Caixa)", data=f.read(), file_name="Financeiro.pdf", mime="application/pdf")
+            
             st.write("Dê duplo clique no Status para alterar para Pago e clique no botão Salvar abaixo.")
-            df_fin['data_vencimento'] = pd.to_datetime(df_fin['data_vencimento']).dt.strftime('%d/%m/%Y')
-            df_edit_fin = st.data_editor(df_fin, column_config={"id": None, "tipo": st.column_config.TextColumn(disabled=True), "valor": st.column_config.NumberColumn(format="R$ %.2f")}, hide_index=True, use_container_width=True)
+            df_edit_fin = st.data_editor(df_fin, column_config={"id": None, "tipo": st.column_config.TextColumn(disabled=True), "valor": st.column_config.NumberColumn(format="R$ %.2f"), "data_vencimento": st.column_config.DateColumn(format="DD/MM/YYYY")}, hide_index=True, use_container_width=True)
             if st.button("💾 Salvar Alterações de Status"):
                 with conn.session as s:
                     for _, row in df_edit_fin.iterrows():
                         s.execute(text("UPDATE financeiro SET status=:s WHERE id=:id"), {"s": row['status'], "id": int(row['id'])})
-                    s.commit()
-                st.rerun()
-                
-            rec_pago = df_fin[(df_fin['tipo']=='Receita') & (df_fin['status']=='Pago')]['valor'].sum()
-            des_pago = df_fin[(df_fin['tipo']=='Despesa') & (df_fin['status']=='Pago')]['valor'].sum()
-            st.metric("Saldo Real em Caixa (Recebido - Pago)", f"R$ {rec_pago - des_pago:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+                    s.commit(); st.rerun()
 
-# ==========================================
-# ABA 4: AGENDA DE COMPRAS E CURVA ABC
-# ==========================================
+# --- ABA 4: CURVA ABC ---
 with aba4:
     st.header("🛒 Agenda de Compras e Contratos (Curva ABC)")
-    st.write("Foco na negociação: descubra quais pacotes de serviço representam o maior volume financeiro da sua obra.")
     
     if not df_tarefas.empty:
-        # Agrupa os dados pegando apenas as tarefas raiz (para não haver dupla contagem financeira)
         df_abc = df_tarefas[df_tarefas['parent_id'].isna()].copy()
-        
         if not df_abc.empty:
             df_abc = df_abc[['fase', 'nome_servico', 'data_inicio', 'custo_previsto']]
-            df_abc.columns = ['Fase', 'Pacote de Compra / Serviço', 'Data Limite (Início)', 'Custo Total (Verba)']
-            
-            # Ordena do serviço mais caro para o mais barato (Lógica Curva ABC)
-            df_abc = df_abc.sort_values(by='Custo Total (Verba)', ascending=False)
-            
-            # Cálculos de Porcentagem e Acumulado
-            total_obra_abc = df_abc['Custo Total (Verba)'].sum()
-            df_abc['% do Total'] = (df_abc['Custo Total (Verba)'] / total_obra_abc) * 100
+            df_abc.columns = ['Fase', 'Pacote', 'Data Limite', 'Custo (Verba)']
+            df_abc = df_abc.sort_values(by='Custo (Verba)', ascending=False)
+            t_abc = df_abc['Custo (Verba)'].sum()
+            df_abc['% do Total'] = (df_abc['Custo (Verba)'] / t_abc) * 100
             df_abc['% Acumulado'] = df_abc['% do Total'].cumsum()
             
-            st.dataframe(
-                df_abc, 
-                column_config={
-                    "Data Limite (Início)": st.column_config.DateColumn(format="DD/MM/YYYY"),
-                    "Custo Total (Verba)": st.column_config.NumberColumn(format="R$ %.2f"),
-                    "% do Total": st.column_config.NumberColumn(format="%.1f%%"),
-                    "% Acumulado": st.column_config.NumberColumn(format="%.1f%%")
-                }, 
-                hide_index=True, 
-                use_container_width=True
-            )
+            if st.button("📄 Gerar PDF da Curva ABC"):
+                import matplotlib.pyplot as plt
+                fig_p, ax1 = plt.subplots(figsize=(10, 4), dpi=150)
+                ax1.bar(df_abc['Pacote'].str[:20], df_abc['Custo (Verba)'], color='#4fc3f7')
+                ax2 = ax1.twinx()
+                ax2.plot(df_abc['Pacote'].str[:20], df_abc['% Acumulado'], color='red', marker='o')
+                plt.xticks(rotation=45, ha='right', fontsize=8); plt.tight_layout()
+                plt.savefig('pareto_temp.png'); plt.close(fig_p)
+                
+                pdf = FPDF(orientation="L", unit="mm", format="A4")
+                pdf.add_page()
+                pdf.set_fill_color(41, 128, 185); pdf.set_text_color(255, 255, 255); pdf.set_font("Arial", "B", 16)
+                pdf.cell(277, 12, remover_acentos(f"Curva ABC de Insumos - {obras_dict[obra_ativa_id]}"), ln=True, align="C", fill=True)
+                pdf.ln(5)
+                pdf.image('pareto_temp.png', x=15, w=260); pdf.ln(5)
+                
+                df_pdf_abc = df_abc.drop(columns=['Fase']).copy() # Esconde fase para caber melhor
+                df_pdf_abc['Data Limite'] = pd.to_datetime(df_pdf_abc['Data Limite']).dt.strftime('%d/%m/%Y')
+                df_pdf_abc['Custo (Verba)'] = df_pdf_abc['Custo (Verba)'].apply(lambda x: f"R$ {float(x):,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+                df_pdf_abc['% do Total'] = df_pdf_abc['% do Total'].apply(lambda x: f"{x:.1f}%")
+                df_pdf_abc['% Acumulado'] = df_pdf_abc['% Acumulado'].apply(lambda x: f"{x:.1f}%")
+                
+                # Gera tabela centralizada (margin left 30)
+                gerar_tabela_pdf(pdf, df_pdf_abc, [120, 30, 40, 25, 25], ["Pacote de Contratacao", "Data Limite", "Custo Estimado", "% Total", "% Acumulado"], base_x=20)
+                
+                pdf.output("relatorio_abc.pdf")
+                with open("relatorio_abc.pdf", "rb") as f: st.download_button("⬇️ Baixar PDF (Curva ABC)", data=f.read(), file_name="CurvaABC.pdf", mime="application/pdf")
+                try: os.remove('pareto_temp.png')
+                except: pass
+
+            st.dataframe(df_abc, column_config={"Data Limite": st.column_config.DateColumn(format="DD/MM/YYYY"), "Custo (Verba)": st.column_config.NumberColumn(format="R$ %.2f"), "% do Total": st.column_config.NumberColumn(format="%.1f%%"), "% Acumulado": st.column_config.NumberColumn(format="%.1f%%")}, hide_index=True, use_container_width=True)
             
-            # Gráfico Profissional de Pareto
             fig_abc = go.Figure()
-            fig_abc.add_trace(go.Bar(x=df_abc['Pacote de Compra / Serviço'], y=df_abc['Custo Total (Verba)'], name="Custo (R$)", marker_color='#4fc3f7'))
-            fig_abc.add_trace(go.Scatter(x=df_abc['Pacote de Compra / Serviço'], y=df_abc['% Acumulado'], mode='lines+markers', name="% Acumulado", yaxis='y2', line=dict(color='red', width=3)))
-            
-            fig_abc.update_layout(
-                title="Gráfico de Pareto (Quais serviços consomem seu orçamento?)",
-                yaxis=dict(title="Custo (R$)"),
-                yaxis2=dict(title="% Acumulado", overlaying='y', side='right', range=[0, 110]),
-                xaxis=dict(tickangle=-45),
-                margin=dict(b=0)
-            )
+            fig_abc.add_trace(go.Bar(x=df_abc['Pacote'], y=df_abc['Custo (Verba)'], name="Custo", marker_color='#4fc3f7'))
+            fig_abc.add_trace(go.Scatter(x=df_abc['Pacote'], y=df_abc['% Acumulado'], mode='lines+markers', name="% Acumulado", yaxis='y2', line=dict(color='red', width=3)))
+            fig_abc.update_layout(title="Gráfico de Pareto", yaxis=dict(title="Custo"), yaxis2=dict(title="% Acumulado", overlaying='y', side='right', range=[0, 110]), margin=dict(b=0))
             st.plotly_chart(fig_abc, use_container_width=True)
-    else:
-        st.info("💡 Adicione tarefas e serviços na aba 'Planejar' para que o sistema construa a sua pauta de compras.")
 
 # --- ABA 5: RDO ---
 with aba5:
