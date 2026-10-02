@@ -340,6 +340,11 @@ with aba3:
     if modo == "Kits Rápido de Engenharia":
         st.write("Gera cadeias automáticas de serviço (CPM) descontando fins de semana.")
         kits = {
+            "Fundações Rasas (Sapatas/Blocos)": [
+                {"nome": "Escavação", "fase": "3. Movimento de Terra (Terraplenagem)"}, 
+                {"nome": "Armação da Fundação", "fase": "4. Fundações e Contenções"}, 
+                {"nome": "Concretagem", "fase": "4. Fundações e Contenções"}
+            ],
             "Concretagem (Laje/Pilar)": [
                 {"nome": "Fôrmas", "fase": "5. Superestrutura (Concreto/Aço/Madeira)"}, 
                 {"nome": "Armação", "fase": "5. Superestrutura (Concreto/Aço/Madeira)"}, 
@@ -350,10 +355,30 @@ with aba3:
                 {"nome": "Chapisco", "fase": "13. Revestimentos Internos e Externos"}, 
                 {"nome": "Reboco", "fase": "13. Revestimentos Internos e Externos"}
             ],
+            "Forro de Gesso Acartonado (Drywall)": [
+                {"nome": "Estruturação e Tabica", "fase": "15. Forros e Pinturas"}, 
+                {"nome": "Emplacamento (Gesso)", "fase": "15. Forros e Pinturas"}, 
+                {"nome": "Tratamento de Juntas", "fase": "15. Forros e Pinturas"}
+            ],
+            "Pintura de Paredes/Teto": [
+                {"nome": "Selador/Fundo", "fase": "15. Forros e Pinturas"}, 
+                {"nome": "Massa (Corrida/Acrílica)", "fase": "15. Forros e Pinturas"}, 
+                {"nome": "Pintura (Acabamento)", "fase": "15. Forros e Pinturas"}
+            ],
             "Porcelanato": [
                 {"nome": "Contrapiso", "fase": "14. Pisos e Rodapés"}, 
                 {"nome": "Assentamento", "fase": "14. Pisos e Rodapés"}, 
                 {"nome": "Rejunte", "fase": "14. Pisos e Rodapés"}
+            ],
+            "Instalações Elétricas (Básicas)": [
+                {"nome": "Tubulação/Eletrodutos", "fase": "10. Instalações Elétricas, Lógicas e SPDA"}, 
+                {"nome": "Enfiação/Cabeamento", "fase": "10. Instalações Elétricas, Lógicas e SPDA"}, 
+                {"nome": "Fechamento (Tomadas/Interruptores)", "fase": "10. Instalações Elétricas, Lógicas e SPDA"}
+            ],
+            "Instalações Hidráulicas": [
+                {"nome": "Rasgos e Tubulação", "fase": "9. Instalações Hidrossanitárias e Gás"}, 
+                {"nome": "Teste de Estanqueidade", "fase": "9. Instalações Hidrossanitárias e Gás"}, 
+                {"nome": "Fechamento de Rasgos", "fase": "9. Instalações Hidrossanitárias e Gás"}
             ]
         }
         kit_sel = st.selectbox("Sistema Construtivo:", list(kits.keys()))
