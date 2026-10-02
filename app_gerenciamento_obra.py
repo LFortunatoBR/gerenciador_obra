@@ -550,20 +550,35 @@ with aba4:
             
             if st.button("📄 Gerar PDF da Curva ABC"):
                 import matplotlib.pyplot as plt
-                # Aumentamos o tamanho base da imagem e mudamos a rotação dos eixos para 90 graus (Vertical)
                 fig_p, ax1 = plt.subplots(figsize=(12, 5), dpi=150)
                 
-                # Truncamos o texto para 28 caracteres para não achatar demasiado o gráfico verticalmente
-                nomes_pacotes = df_abc['Pacote'].str[:28] 
+                # Truncamos o texto em 35 caracteres, pois agora ele cresce dentro da barra
+                nomes_pacotes = df_abc['Pacote'].str[:35] 
                 
-                ax1.bar(nomes_pacotes, df_abc['Custo (Verba)'], color='#4fc3f7')
+                # Desenhamos as barras azuis e a linha vermelha
+                barras = ax1.bar(nomes_pacotes, df_abc['Custo (Verba)'], color='#4fc3f7')
                 ax2 = ax1.twinx()
                 ax2.plot(nomes_pacotes, df_abc['% Acumulado'], color='red', marker='o')
                 
-                # Força o alinhamento central com as barras, na vertical (90 graus) e fonte menor (6.5)
+                # APAGA TODOS OS RÓTULOS EM BAIXO DO EIXO X PARA NÃO OUPAREM ESPAÇO
                 ax1.set_xticks(range(len(nomes_pacotes)))
-                ax1.set_xticklabels(nomes_pacotes, rotation=90, ha='center', fontsize=6.5)
+                ax1.set_xticklabels([]) 
                 
+                # ESCRITA DENTRO DA BARRA (A Sua Sugestão Visual)
+                max_y = df_abc['Custo (Verba)'].max()
+                for i, barra in enumerate(barras):
+                    # Encontra o meio exato horizontal da barra
+                    xval = barra.get_x() + barra.get_width() / 2
+                    
+                    # Define que o texto começará a 2% de distância do chão da barra
+                    y_texto = max_y * 0.02
+                    
+                    # Se o texto ultrapassar a altura da barrinha, podemos pintá-lo ou redimensionar.
+                    # Mas para o Pareto, alinhamento pela base (bottom) resolve.
+                    texto = nomes_pacotes.iloc[i]
+                    ax1.text(xval, y_texto, texto, rotation=90, ha='center', va='bottom', fontsize=7, color='black', weight='bold')
+                
+                # O tight_layout agora terá muito espaço de folga pois não há textos fora do gráfico
                 plt.tight_layout()
                 plt.savefig('pareto_temp.png', bbox_inches='tight'); plt.close(fig_p)
                 
