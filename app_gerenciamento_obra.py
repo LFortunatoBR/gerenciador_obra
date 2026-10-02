@@ -277,36 +277,86 @@ with aba4:
     else:
         st.warning("⚠️ Linha de base não definida. Salve a configuração atual primeiro no botão acima.")
 
-# ==========================================
-# ABA 3: PLANEJAR (MS PROJECT INPUT)
-# ==========================================
+# --- ABA 3: PLANEJAR (MOTOR MS PROJECT) ---
 with aba3:
-    st.subheader("⚙️ Adicionar Tarefas (Motor MS Project)")
-    with st.form("f_manual"):
-        n = st.text_input("Nome da Tarefa/Etapa")
-        f = st.selectbox("Fase", ["Projetos", "Infraestrutura", "Superestrutura", "Instalações", "Acabamento"])
+    st.subheader("⚙️ Planejamento Avançado")
+    modo = st.radio("Método de Inserção:", ["Kits Rápido de Engenharia", "Tarefa Manual Detalhada (MS Project)"])
+    st.divider()
+
+    if modo == "Kits Rápido de Engenharia":
+        st.write("Gera cadeias automáticas de serviço (CPM) descontando fins de semana.")
+        kits = {
+            "Concretagem (Laje/Pilar)": [{"nome": "Fôrmas", "fase": "Superestrutura"}, {"nome": "Armação", "fase": "Superestrutura"}, {"nome": "Concretagem", "fase": "Superestrutura"}],
+            "Alvenaria e Acabamento": [{"nome": "Alvenaria", "fase": "Superestrutura"}, {"nome": "Chapisco", "fase": "Acabamento"}, {"nome": "Reboco", "fase": "Acabamento"}],
+            "Porcelanato": [{"nome": "Contrapiso", "fase": "Acabamento"}, {"nome": "Assentamento", "fase": "Acabamento"}, {"nome": "Rejunte", "fase": "Acabamento"}]
+        }
+        kit_sel = st.selectbox("Sistema Construtivo:", list(kits.keys()))
         
-        c_pai, c_cst = st.columns(2)
-        pai = c_pai.selectbox("Pertence à qual Macro-etapa?", options=list(opcoes_parent.keys()), format_func=lambda x: opcoes_parent[x])
-        cst = c_cst.number_input("Custo (R$)", min_value=0.0)
-        
-        c_i, c_f = st.columns(2)
-        i, fm = c_i.date_input("Início Planejado"), c_f.date_input("Término Planejado")
-        
-        st.write("**Dependências Lógicas**")
-        c1, c2, c3 = st.columns(3)
-        dep = c1.selectbox("Depende de?", options=list(opcoes_dep.keys()), format_func=lambda x: opcoes_dep[x])
-        tipo = c2.selectbox("Tipo de Ligação", ["TI (Término-Início)", "II (Início-Início)"])
-        lag = c3.number_input("Lag/Espera (Dias)", value=0, help="Tempo extra. Ex: Cura de laje = 3 dias.")
-        
-        if st.form_submit_button("Inserir no Cronograma"):
-            with conn.session as s:
-                s.execute(text("""
-                    INSERT INTO tarefas (nome_servico, fase, data_inicio, data_fim, conclusao_percentual, custo_previsto, obra_id, parent_id, dependencia_id, tipo_dep, lag_dias) 
-                    VALUES (:n, :f, :i, :fim, 0, :c, :ob, :pa, :d, :td, :lag)
-                """), {"n": n, "f": f, "i": i, "fim": fm, "c": cst, "ob": int(obra_ativa_id), "pa": None if pai==0 else pai, "d": None if dep==0 else dep, "td": tipo[:2], "lag": lag})
-                s.commit()
-            st.success("Tarefa Inserida! Vá a Aba 1 e clique em Recalcular CPM.")
+        with st.form("form_kit"):
+            dt_ini = st.date_input("Início da 1ª Etapa")
+            cols = st.columns(len(kits[kit_sel]))
+            dias_lst, custo_lst = [], []
+            for i, etp in enumerate(kits[kit_sel]):
+                with cols[i]:
+                    st.markdown(f"**{etp['nome']}**")
+                    dias_lst.append(st.number_input("Dias", 1, 100, 2, key=f"k_d_{i}"))
+                    custo_lst.append(st.number_input("Custo R$", 0.0, format="%.2f", key=f"k_c_{i}"))
+            
+            pai_m = st.selectbox("Pertence a qual Macro-etapa?", options=list(opcoes_parent.keys()), format_func=lambda x: opcoes_parent[x])
+            dep_m = st.selectbox("A 1ª etapa depende de quem?", options=list(opcoes_dep.keys()), format_func=lambda x: opcoes_dep[x])
+            
+            if st.form_submit_button("🚀 Gerar Cascata"):
+                curr_date = dt_ini
+                curr_dep = None if dep_m == 0 else dep_m
+                val_pai = None if pai_m == 0 else pai_m
+                
+                with conn.session as s:
+                    for i, etp in enumerate(kits[kit_sel]):
+                        # Adiciona apenas dias úteis
+                        fim_calc = add_bus_days(curr_date, dias_lst[i] - 1)
+                        
+                        res = s.execute(text("""
+                            INSERT INTO tarefas (nome_servico, fase, data_inicio, data_fim, conclusao_percentual, custo_previsto, dependencia_id, obra_id, parent_id, tipo_dep, lag_dias) 
+                            VALUES (:n, :f, :i, :fim, 0, :c, :d, :ob, :pa, 'TI', 0) RETURNING id
+                        """), {"n": etp['nome'], "f": etp['fase'], "i": curr_date, "fim": fim_calc, "c": custo_lst[i], "d": curr_dep, "ob": int(obra_ativa_id), "pa": val_pai})
+                        
+                        # A etapa seguinte passa a depender do ID da etapa que acabou de ser criada
+                        curr_dep = res.scalar()
+                        curr_date = add_bus_days(fim_calc, 1)
+                    s.commit()
+                st.success("Kit gerado! Vá na Aba 1 e Recalcule o CPM.")
+                
+    else:
+        st.write("Adicione tarefas isoladas com regras complexas de dependência e Lags.")
+        with st.form("form_manual_unico"):
+            n = st.text_input("Nome da Tarefa/Etapa")
+            f = st.selectbox("Fase", ["Projetos", "Infraestrutura", "Superestrutura", "Instalações", "Acabamento"])
+            
+            c_pai, c_cst = st.columns(2)
+            pai = c_pai.selectbox("Pertence à qual Macro-etapa?", options=list(opcoes_parent.keys()), format_func=lambda x: opcoes_parent[x])
+            cst = c_cst.number_input("Custo Previsto (R$)", min_value=0.0)
+            
+            c_i, c_f = st.columns(2)
+            i = c_i.date_input("Início Planejado")
+            fm = c_f.date_input("Término Planejado")
+            
+            st.write("**Dependências Lógicas**")
+            c1, c2, c3 = st.columns(3)
+            dep = c1.selectbox("Depende de?", options=list(opcoes_dep.keys()), format_func=lambda x: opcoes_dep[x])
+            tipo = c2.selectbox("Tipo de Ligação", ["TI (Término-Início)", "II (Início-Início)"])
+            lag = c3.number_input("Lag/Espera (Dias)", value=0)
+            
+            if st.form_submit_button("Inserir no Cronograma"):
+                if i > fm:
+                    st.error("O Início não pode ser maior que o Término!")
+                else:
+                    with conn.session as s:
+                        s.execute(text("""
+                            INSERT INTO tarefas (nome_servico, fase, data_inicio, data_fim, conclusao_percentual, custo_previsto, obra_id, parent_id, dependencia_id, tipo_dep, lag_dias) 
+                            VALUES (:n, :f, :i, :fim, 0, :c, :ob, :pa, :d, :td, :lag)
+                        """), {"n": n, "f": f, "i": i, "fim": fm, "c": cst, "ob": int(obra_ativa_id), "pa": None if pai==0 else pai, "d": None if dep==0 else dep, "td": tipo[:2], "lag": lag})
+                        s.commit()
+                    st.success("Tarefa Inserida! Vá a Aba 1 e clique em Recalcular Cronograma (CPM).")
 
 # --- ABA 2: BUSCADOR SINAPI ---
 with aba2:
