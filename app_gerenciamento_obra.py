@@ -11,7 +11,12 @@ import pytz
 
 def remover_acentos(texto):
     if pd.isna(texto): return ""
-    return ''.join(c for c in unicodedata.normalize('NFD', str(texto)) if unicodedata.category(c) != 'Mn')
+    # Traduz os emojis/ícones visuais para texto simples aceito pelo PDF (latin-1)
+    texto = str(texto).replace("📦 ", "").replace("↳", "->").replace("➤", ">>").replace("⭐", "***")
+    # Remove acentos tradicionais
+    s = ''.join(c for c in unicodedata.normalize('NFD', texto) if unicodedata.category(c) != 'Mn')
+    # Força a codificação segura ignorando qualquer outro caractere especial perdido
+    return s.encode('latin1', 'ignore').decode('latin1')
 
 # ==========================================
 # MOTOR DE TABELAS PDF (LINHAS AUTOMÁTICAS E CORES)
@@ -243,7 +248,6 @@ with aba1:
         fig.update_yaxes(autorange="reversed"); fig.update_layout(height=400, margin=dict(l=0, r=0, t=30, b=0))
         st.plotly_chart(fig, use_container_width=True)
         
-        # TABELA EAP
         st.subheader("📋 Estrutura Analítica (EAP)")
         df_exib_rows = []
         fases_presentes = sorted(df_tarefas['fase'].unique(), key=lambda x: FASES_DA_OBRA.index(x) if x in FASES_DA_OBRA else 999)
@@ -263,7 +267,6 @@ with aba1:
         df_exib = pd.DataFrame(df_exib_rows)
         st.dataframe(df_exib, column_config={"id": None, "Custo (R$)": st.column_config.NumberColumn(format="R$ %.2f"), "Venda (R$)": st.column_config.NumberColumn(format="R$ %.2f")}, hide_index=True, use_container_width=True)
 
-        # PDF DUPLO EAP COM O NOVO MOTOR
         st.divider()
         st.write("📄 **Exportar Cronogramas (A4 Alta Resolução com Quebra Automática)**")
         c_pdf1, c_pdf2 = st.columns(2)
@@ -293,9 +296,7 @@ with aba1:
                 pdf.cell(277, 10, remover_acentos(titulo_valor.replace(",", "X").replace(".", ",").replace("X", ".")), ln=True, align="C")
                 pdf.image(caminho_img, x=15, w=260); pdf.ln(5)
                 
-                # Prepara DataFrame para a Tabela Bonita
                 df_pdf_eap = df_exib.drop(columns=['id']).copy()
-                
                 if tipo_pdf == "interno":
                     df_pdf_eap = df_pdf_eap.drop(columns=['Venda (R$)'])
                     df_pdf_eap['Custo (R$)'] = df_pdf_eap['Custo (R$)'].apply(lambda x: f"R$ {float(x):,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
@@ -306,8 +307,6 @@ with aba1:
                     col_names = ["Servico", "Inicio", "Termino", "Conc.", "Valor (Venda)"]
                     
                 df_pdf_eap['Conc. %'] = df_pdf_eap['Conc. %'].apply(lambda x: f"{int(x)}%" if pd.notna(x) else "")
-                
-                # Gera tabela centralizada (Largura total 240, sobra 57, logo x=28.5)
                 gerar_tabela_pdf(pdf, df_pdf_eap, [130, 25, 25, 20, 40], col_names, base_x=28.5)
                 
                 pdf.output("relatorio_gantt.pdf")
@@ -441,7 +440,6 @@ with aba3:
                 df_pdf_fin['valor'] = df_pdf_fin['valor'].apply(lambda x: f"R$ {float(x):,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
                 df_pdf_fin['data_vencimento'] = pd.to_datetime(df_pdf_fin['data_vencimento']).dt.strftime('%d/%m/%Y')
                 
-                # 185mm total na vertical
                 gerar_tabela_pdf(pdf, df_pdf_fin, [25, 75, 35, 25, 25], ["Tipo", "Descricao", "Valor", "Vencimento", "Status"], base_x=12.5)
                 
                 pdf.output("relatorio_caixa.pdf")
@@ -491,7 +489,6 @@ with aba4:
                 df_pdf_abc['% do Total'] = df_pdf_abc['% do Total'].apply(lambda x: f"{x:.1f}%")
                 df_pdf_abc['% Acumulado'] = df_pdf_abc['% Acumulado'].apply(lambda x: f"{x:.1f}%")
                 
-                # 240 largura total
                 gerar_tabela_pdf(pdf, df_pdf_abc, [120, 30, 40, 25, 25], ["Pacote de Contratacao", "Data Limite", "Custo Estimado", "% Total", "% Acumulado"], base_x=28.5)
                 
                 pdf.output("relatorio_abc.pdf")
@@ -557,7 +554,7 @@ with aba6:
 
 # --- ABA 7: PLANEJAR KITS ---
 with aba7:
-    st.subheader("⚙️️ Planejamento Avançado")
+    st.subheader("⚙ Planejamento Avançado")
     modo = st.radio("Método:", ["Kits Rápidos", "Tarefa Manual"])
     if modo == "Kits Rápidos":
         kits = {
