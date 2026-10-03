@@ -157,11 +157,30 @@ fuso_brasil = pytz.timezone('America/Sao_Paulo')
 hoje = datetime.now(fuso_brasil).date()
 
 # ==========================================
-# FUNÇÕES DE CACHE (ALTA PERFORMANCE)
+# FUNÇÕES DE CACHE E BUSCA INTELIGENTE
 # ==========================================
 @st.cache_data(ttl=3600)
-def buscar_sinapi_cache(busca_texto, tabela):
-    return conn.query(f"SELECT codigo, descricao, unidade, preco_mediano FROM {tabela} WHERE descricao ILIKE '%{busca_texto}%' LIMIT 15;", ttl=0)
+def carregar_tabela_sinapi(tabela):
+    # Carrega a tabela toda na memória para não depender da lerdeza do SQL com acentos
+    return conn.query(f"SELECT codigo, descricao, unidade, preco_mediano FROM {tabela};", ttl=0)
+
+def buscar_sinapi_inteligente(busca_texto, tabela):
+    df = carregar_tabela_sinapi(tabela)
+    if not busca_texto: return pd.DataFrame()
+        
+    # Divide "pintura acrílica" em ['pintura', 'acrilica'] (ignorando acentos e maiúsculas)
+    termos = remover_acentos(busca_texto).lower().split()
+    
+    # Cria a máscara de pesquisa
+    mask = pd.Series(True, index=df.index)
+    desc_norm = df['descricao'].astype(str).apply(lambda x: remover_acentos(x).lower())
+    
+    # Filtra para que TODAS as palavras estejam na frase, em qualquer ordem
+    for t in termos:
+        mask = mask & desc_norm.str.contains(t)
+        
+    # Retorna os 25 primeiros resultados (Aumentado de 15 para dar mais visão)
+    return df[mask].head(25)
 
 @st.cache_data(ttl=3600)
 def explodir_composicao_cache(codigo_composicao):
@@ -547,12 +566,18 @@ with aba5:
 with aba6:
     st.subheader("Orçamentação Paramétrica e Nivelamento")
     tipo_busca = st.radio("O que deseja orçar?", ["Serviços Completos (Composições)"])
-    busca = st.text_input("🔍 Buscar Serviço (ex: Alvenaria)")
+    busca = st.text_input("🔍 Buscar Serviço (ex: pintura interna acrilica)")
+    
     if busca:
-        df_sinapi = buscar_sinapi_cache(busca, "sinapi_composicoes")
+        df_sinapi = buscar_sinapi_inteligente(busca, "sinapi_composicoes")
+        
+        if df_sinapi.empty:
+            st.warning("Nenhum serviço encontrado. Tente usar menos palavras (ex: apenas 'pintura').")
+            
         for index, row in df_sinapi.iterrows():
             with st.expander(f"📦 {row['descricao'][:60]}... | Preço Tabela: R$ {float(row['preco_mediano']):.2f} / {row['unidade']}"):
                 with st.form(f"add_sinapi_{index}"):
+
                     c1, c2 = st.columns(2)
                     qtd = c1.number_input(f"Quantidade ({row['unidade']})", min_value=0.1, value=1.0)
                     equipe = c2.number_input("Tamanho da Equipe (Qtd Trabalhadores)", min_value=1, value=2)
